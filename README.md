@@ -114,3 +114,37 @@ HTML报告: comparison_report.html
 坚持去λ化(中-易) csv-auto-checker  main @
 
 ```
+
+* 导出相同的比较的数据
+
+```
+坚持去λ化(中-易) csv-auto-checker  main @ python csv_compare_ignore_export.py   file1.csv file2.csv --keys user_id product_id --exclude quantity purchase_date --export-identical-sep
+arate file1_clean.csv file2_clean.csv
+2025-07-19 06:55:35,662 - INFO - Starting to load CSV file: file1.csv
+2025-07-19 06:55:35,666 - INFO - Successfully loaded 10 rows of data
+2025-07-19 06:55:35,666 - INFO - Starting to load CSV file: file2.csv
+2025-07-19 06:55:35,668 - INFO - Successfully loaded 10 rows of data
+2025-07-19 06:55:35,668 - INFO - Starting CSV comparison process
+2025-07-19 06:55:35,668 - INFO - Starting to load CSV file: file1.csv
+2025-07-19 06:55:35,670 - INFO - Successfully loaded 10 rows of data
+2025-07-19 06:55:35,670 - INFO - Starting to load CSV file: file2.csv
+2025-07-19 06:55:35,671 - INFO - Successfully loaded 10 rows of data
+2025-07-19 06:55:35,671 - INFO - Excluded fields from comparison: quantity, purchase_date
+2025-07-19 06:55:35,672 - INFO - Sample primary keys from file1: ['1001|P001', '1001|P002', '1002|P001']
+2025-07-19 06:55:35,672 - INFO - Sample primary keys from file2: ['1001|P001', '1001|P002', '1002|P001']
+2025-07-19 06:55:35,672 - INFO - Found 8 common keys
+2025-07-19 06:55:35,674 - INFO - Smart sampling completed: 8 keys, 8 + 8 rows
+2025-07-19 06:55:35,677 - INFO - Comparison completed: 8 common keys
+2025-07-19 06:55:35,677 - INFO - HTML report generated: comparison_report.html
+2025-07-19 06:55:35,683 - INFO - File1 identical rows exported: file1_clean.csv (total: 5 rows)
+2025-07-19 06:55:35,683 - INFO - File2 identical rows exported: file2_clean.csv (total: 5 rows)
+
+=== Comparison Complete ===
+Total Primary Keys: 8
+Common Primary Keys: 8
+Identical Rows: 5
+Rows with Differences: 3
+HTML Report: comparison_report.html
+坚持去λ化(中-易) csv-auto-checker  main @ diff file1_clean.csv file2_clean.csv
+
+```
