@@ -74,10 +74,11 @@ class CSVComparator:
         if len(self.primary_keys) == 1:
             return df[self.primary_keys[0]].astype(str)
         else:
-            # 组合多个主键
-            return df[self.primary_keys].apply(
-                lambda x: '|'.join(x.astype(str)), axis=1
-            )
+            # 组合多个主键，确保所有值都转换为字符串
+            key_parts = []
+            for key in self.primary_keys:
+                key_parts.append(df[key].astype(str))
+            return pd.Series(['|'.join(parts) for parts in zip(*key_parts)], index=df.index)
     
     def intelligent_sampling(self, df1: pd.DataFrame, df2: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -89,24 +90,30 @@ class CSVComparator:
         Returns:
             抽样后的数据框
         """
-        if self.sample_rate >= 1.0:
-            return df1, df2
-            
         # 创建主键
         key1 = self.create_composite_key(df1)
         key2 = self.create_composite_key(df2)
         
+        logger.info(f"文件1中的主键示例: {key1.head(3).tolist()}")
+        logger.info(f"文件2中的主键示例: {key2.head(3).tolist()}")
+        
         # 找到共同的主键
         common_keys = set(key1) & set(key2)
+        
+        logger.info(f"找到 {len(common_keys)} 个共同主键")
         
         if len(common_keys) == 0:
             logger.warning("未找到共同的主键，使用随机抽样")
             sample_size = int(min(len(df1), len(df2)) * self.sample_rate)
             return df1.sample(n=sample_size), df2.sample(n=sample_size)
         
-        # 对共同主键进行抽样
-        sample_size = int(len(common_keys) * self.sample_rate)
-        sampled_keys = random.sample(list(common_keys), sample_size)
+        # 如果抽样率为1.0或共同主键数较少，直接返回所有共同主键的数据
+        if self.sample_rate >= 1.0 or len(common_keys) <= 100:
+            sampled_keys = list(common_keys)
+        else:
+            # 对共同主键进行抽样
+            sample_size = int(len(common_keys) * self.sample_rate)
+            sampled_keys = random.sample(list(common_keys), sample_size)
         
         # 筛选数据
         df1_sampled = df1[key1.isin(sampled_keys)]
@@ -187,6 +194,12 @@ class CSVComparator:
                 row1 = df1.loc[key]
                 row2 = df2.loc[key]
                 
+                # 处理Series和DataFrame的情况
+                if isinstance(row1, pd.DataFrame):
+                    row1 = row1.iloc[0]
+                if isinstance(row2, pd.DataFrame):
+                    row2 = row2.iloc[0]
+                
                 # 对比每个字段
                 diff_fields = []
                 for col in df1.columns:
@@ -210,6 +223,10 @@ class CSVComparator:
                     identical_rows += 1
                     
             except KeyError:
+                logger.warning(f"主键 {key} 在某个数据框中不存在")
+                continue
+            except Exception as e:
+                logger.error(f"处理主键 {key} 时出错: {e}")
                 continue
         
         return {
