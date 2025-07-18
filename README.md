@@ -81,3 +81,7 @@ comparator.export_differences_csv('differences.csv')
 
 这个工具特别适合处理大型CSV文件的对比，通过智能抽样和并行处理，可以在合理的时间内完成对比并生成直观的HTML报告。
 
+## 生成演示图：
+
+![./csv_compare.png]
+
