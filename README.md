@@ -5,6 +5,7 @@
 * 高性能对比大CSV的问题, 用go写高性能方案，或减少搜索范围，以此减少计算空间
 * 可视化输出，可以关键输出比较不同的数据位置，快速迭代集成有效相同部分, 从而得到相应的transform是什么
 * 引入Agent的设计做智能化的随机抽样式的比较，去引导减少对比计算量: 比如`rg id1 | grep id2 `的很少奇异值的比较
+* 支持排除字段比较：逐个字段比较突破
 
 ---
 
@@ -85,3 +86,31 @@ comparator.export_differences_csv('differences.csv')
 
 ![./csv_compare.png]
 
+---
+
+## 支持排除字段比较：
+
+```
+坚持去λ化(中-易) csv-auto-checker  main @ python csv_compare_ignore.py  file1.csv file2.csv --keys user_id product_id --exclude quantity purchase_date
+2025-07-19 06:24:24,896 - INFO - 开始CSV对比流程
+2025-07-19 06:24:24,896 - INFO - 开始加载CSV文件: file1.csv
+2025-07-19 06:24:24,900 - INFO - 成功加载 10 行数据
+2025-07-19 06:24:24,900 - INFO - 开始加载CSV文件: file2.csv
+2025-07-19 06:24:24,902 - INFO - 成功加载 10 行数据
+2025-07-19 06:24:24,902 - INFO - 排除比较的字段: quantity, purchase_date
+2025-07-19 06:24:24,903 - INFO - 文件1中的主键示例: ['1001|P001', '1001|P002', '1002|P001']
+2025-07-19 06:24:24,903 - INFO - 文件2中的主键示例: ['1001|P001', '1001|P002', '1002|P001']
+2025-07-19 06:24:24,903 - INFO - 找到 8 个共同主键
+2025-07-19 06:24:24,904 - INFO - 智能抽样完成: 8 个主键, 8 + 8 行数据
+2025-07-19 06:24:24,907 - INFO - 对比完成: 8 个共同主键
+2025-07-19 06:24:24,908 - INFO - HTML报告已生成: comparison_report.html
+
+=== 对比完成 ===
+总主键数: 8
+共同主键数: 8
+相同行数: 5
+差异行数: 3
+HTML报告: comparison_report.html
+坚持去λ化(中-易) csv-auto-checker  main @
+
+```
