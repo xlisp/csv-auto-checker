@@ -84,7 +84,7 @@ comparator.export_differences_csv('differences.csv')
 
 ## 生成演示图：
 
-![./csv_compare.png]
+![](./csv_compare.png)
 
 ---
 
