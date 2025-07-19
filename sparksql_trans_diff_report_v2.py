@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -18,17 +17,22 @@ from typing import Dict, List, Tuple, Any
 
 class SparkSQLValidator:
     def __init__(self, app_name="SparkSQL_Validator"):
-        # 初始化Spark会话
-        self.spark = SparkSession.builder \
-            .appName(app_name) \
-            .config("spark.sql.adaptive.enabled", "true") \
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .config("spark.sql.shuffle.partitions", "200") \
-            .getOrCreate()
-        
-        self.spark.sparkContext.setLogLevel("WARN")
-        self.comparison_results = {}
-        self.execution_log = []
+        try:
+            # 初始化Spark会话
+            self.spark = SparkSession.builder \
+                .appName(app_name) \
+                .config("spark.sql.adaptive.enabled", "true") \
+                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+                .config("spark.sql.shuffle.partitions", "200") \
+                .getOrCreate()
+            
+            self.spark.sparkContext.setLogLevel("WARN")
+            self.comparison_results = {}
+            self.execution_log = []
+            self.log_message("Spark会话初始化成功")
+        except Exception as e:
+            print(f"Spark会话初始化失败: {str(e)}")
+            sys.exit(1)
     
     def log_message(self, message: str, level: str = "INFO"):
         """记录日志消息"""
@@ -37,11 +41,29 @@ class SparkSQLValidator:
         print(log_entry)
         self.execution_log.append(log_entry)
     
+    def read_sql_from_file(self, sql_path: str) -> str:
+        """从文件读取SQL语句"""
+        try:
+            if not os.path.exists(sql_path):
+                raise FileNotFoundError(f"SQL文件不存在: {sql_path}")
+            
+            with open(sql_path, 'r', encoding='utf-8') as f:
+                sql_content = f.read().strip()
+            
+            self.log_message(f"成功读取SQL文件: {sql_path}")
+            return sql_content
+            
+        except Exception as e:
+            self.log_message(f"读取SQL文件失败 {sql_path}: {str(e)}", "ERROR")
+            raise
+    
     def read_csv_file(self, file_path: str, table_name: str) -> bool:
         """读取CSV文件并注册为临时表"""
         try:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"文件不存在: {file_path}")
+            
+            self.log_message(f"开始读取CSV文件: {file_path}")
             
             df = self.spark.read \
                 .option("header", "true") \
@@ -89,13 +111,13 @@ class SparkSQLValidator:
             
         except Exception as e:
             self.log_message(f"SQL执行失败: {str(e)}", "ERROR")
-            return None
+            raise
     
     def load_expected_results(self, expected_file: str, expected_table: str = "expected_result"):
         """加载期望结果文件"""
         try:
             if not self.read_csv_file(expected_file, expected_table):
-                return None
+                raise Exception("无法读取期望结果文件")
             
             expected_df = self.spark.table(expected_table)
             self.log_message("期望结果文件加载成功")
@@ -104,7 +126,7 @@ class SparkSQLValidator:
             
         except Exception as e:
             self.log_message(f"加载期望结果失败: {str(e)}", "ERROR")
-            return None
+            raise
     
     def compare_schemas(self, actual_df, expected_df) -> Dict[str, Any]:
         """比较数据结构"""
@@ -189,8 +211,8 @@ class SparkSQLValidator:
                 "rows_only_in_expected": only_in_expected.count(),
                 "data_match_percentage": (matching_rows / max(actual_count, expected_count) * 100) if max(actual_count, expected_count) > 0 else 0,
                 "sample_differences": {
-                    "only_in_actual": only_in_actual.limit(10).toPandas().to_dict('records'),
-                    "only_in_expected": only_in_expected.limit(10).toPandas().to_dict('records')
+                    "only_in_actual": only_in_actual.limit(10).toPandas().to_dict('records') if only_in_actual.count() > 0 else [],
+                    "only_in_expected": only_in_expected.limit(10).toPandas().to_dict('records') if only_in_expected.count() > 0 else []
                 }
             }
             
@@ -214,10 +236,10 @@ class SparkSQLValidator:
                     col_stats = self.spark.sql(f"""
                         SELECT 
                             COUNT(*) as total_count,
-                            COUNT({column}) as non_null_count,
-                            COUNT(DISTINCT {column}) as distinct_count,
-                            MIN(LENGTH({column})) as min_length,
-                            MAX(LENGTH({column})) as max_length
+                            COUNT(`{column}`) as non_null_count,
+                            COUNT(DISTINCT `{column}`) as distinct_count,
+                            MIN(LENGTH(`{column}`)) as min_length,
+                            MAX(LENGTH(`{column}`)) as max_length
                         FROM stats_{table_name}
                     """).collect()[0].asDict()
                 
@@ -226,11 +248,11 @@ class SparkSQLValidator:
                     col_stats = self.spark.sql(f"""
                         SELECT 
                             COUNT(*) as total_count,
-                            COUNT({column}) as non_null_count,
-                            COUNT(DISTINCT {column}) as distinct_count,
-                            MIN({column}) as min_value,
-                            MAX({column}) as max_value,
-                            AVG({column}) as avg_value
+                            COUNT(`{column}`) as non_null_count,
+                            COUNT(DISTINCT `{column}`) as distinct_count,
+                            MIN(`{column}`) as min_value,
+                            MAX(`{column}`) as max_value,
+                            AVG(`{column}`) as avg_value
                         FROM stats_{table_name}
                     """).collect()[0].asDict()
                 
@@ -239,8 +261,8 @@ class SparkSQLValidator:
                     col_stats = self.spark.sql(f"""
                         SELECT 
                             COUNT(*) as total_count,
-                            COUNT({column}) as non_null_count,
-                            COUNT(DISTINCT {column}) as distinct_count
+                            COUNT(`{column}`) as non_null_count,
+                            COUNT(DISTINCT `{column}`) as distinct_count
                         FROM stats_{table_name}
                     """).collect()[0].asDict()
                 
@@ -314,7 +336,7 @@ class SparkSQLValidator:
             )
             
             is_content_match = False
-            if "content_comparison" in validation_results:
+            if "content_comparison" in validation_results and "error" not in validation_results["content_comparison"]:
                 content_comp = validation_results["content_comparison"]
                 is_content_match = (
                     content_comp.get("data_match_percentage", 0) == 100.0 and
@@ -544,47 +566,53 @@ class SparkSQLValidator:
     
     def close(self):
         """关闭Spark会话"""
-        self.spark.stop()
+        if hasattr(self, 'spark'):
+            self.spark.stop()
 
 def main():
     parser = argparse.ArgumentParser(description="Spark SQL验证器 - 比对数据转换结果")
     parser.add_argument("--source", "-s", required=True, help="源数据CSV文件路径")
     parser.add_argument("--expected", "-e", required=True, help="期望结果CSV文件路径")
-    parser.add_argument("--sql", "-q", required=True, help="Spark SQL语句")
+    parser.add_argument("--sql", "-q", required=True, help="Spark SQL语句或SQL文件路径")
     parser.add_argument("--output", "-o", default="validation_report.html", help="HTML报告输出路径")
     
     args = parser.parse_args()
     
+    # 检查参数
+    print(f"源数据文件: {args.source}")
+    print(f"期望结果文件: {args.expected}")
+    print(f"SQL参数: {args.sql}")
+    print(f"输出文件: {args.output}")
+    
+    # 检查文件是否存在
+    if not os.path.exists(args.source):
+        print(f"错误: 源数据文件不存在: {args.source}")
+        sys.exit(1)
+    
+    if not os.path.exists(args.expected):
+        print(f"错误: 期望结果文件不存在: {args.expected}")
+        sys.exit(1)
+    
     # 创建验证器实例
+    validator = None
+    
     validator = SparkSQLValidator()
     
-    try:
-        # 执行验证
-        results = validator.validate_transformation(
-            source_file=args.source,
-            expected_file=args.expected,
-            spark_sql=args.sql
-        )
+    # 判断SQL参数是文件还是SQL语句
+    if os.path.exists(args.sql):
+        # 从文件读取SQL
+        sql_query = validator.read_sql_from_file(args.sql)
+    else:
+        # 直接使用SQL语句
+        sql_query = args.sql
+    
+    # 执行验证
+    results = validator.validate_transformation(
+        source_file=args.source,
+        expected_file=args.expected,
+        spark_sql=sql_query
+    )
+    
+    # 生成HTML报告
+    validator.generate_html_report(results, args.output)
         
-        # 生成HTML报告
-        validator.generate_html_report(results, args.output)
-        
-        # 打印总结
-        if results.get("success"):
-            summary = results.get("summary", {})
-            if summary.get("overall_success"):
-                print("\n✅ 验证通过！Spark SQL转换结果与期望一致")
-            else:
-                print(f"\n❌ 验证失败！匹配度: {summary.get('match_percentage', 0):.1f}%")
-                print("详细信息请查看HTML报告")
-        else:
-            print(f"\n❌ 验证过程出错: {results.get('error', '未知错误')}")
-        
-        print(f"\n📊 详细报告已保存至: {args.output}")
-        
-    except Exception as e:
-        print(f"程序执行错误: {str(e)}")
-        
-    finally:
-        print("erro ... ??? ")
-        validator.close()
