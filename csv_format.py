@@ -127,7 +127,7 @@ def main():
     # 创建处理器实例
     processor = CSVProcessor()
     
-    # 1. 生成测试数据
+    # 1. 生成测试数
     test_file = processor.generate_test_data('test_input.csv', 50)
     
     # 2. 加载CSV文件
@@ -163,26 +163,18 @@ def main():
 # 使用示例
 if __name__ == "__main__":
     # 运行主程序
-    main()
-    
-    # 或者手动操作示例
-    print("\n" + "="*50)
-    print("手动操作示例:")
-    print("="*50)
+    #main()
     
     # 创建新的处理器实例进行演示
     demo_processor = CSVProcessor()
     
-    # 生成另一组测试数据
-    demo_file = demo_processor.generate_test_data('demo_data.csv', 20)
-    demo_processor.load_csv(demo_file)
+    demo_processor.load_csv('demo_data.csv')
     
-    print("\n手动转换示例:")
     # 单独执行转换操作
     demo_processor.convert_date_format('日期', '%Y%m%d', '%Y/%m/%d')  # 转换为 2025/07/20 格式
     demo_processor.convert_precision('精度值', 2)  # 保留2位小数
     demo_processor.replace_values('状态', {'A': 'Alpha', 'B': 'Beta', 'C': 'Gamma'})
     
     demo_processor.preview_data(3)
-    demo_processor.export_csv('demo_output.csv')
+    demo_processor.export_csv('demo_output_new.csv')
 
