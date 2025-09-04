@@ -8,6 +8,56 @@ import os
 import argparse
 from pathlib import Path
 
+def detect_csv_delimiter(filepath, sample_size=1024):
+    """
+    检测CSV文件的分隔符
+    """
+    common_delimiters = [',', '|', '\t', ';', ':']
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8', newline='') as file:
+            sample = file.read(sample_size)
+            
+        # 使用csv.Sniffer检测
+        sniffer = csv.Sniffer()
+        try:
+            dialect = sniffer.sniff(sample, delimiters=',|\t;:')
+            return dialect.delimiter
+        except csv.Error:
+            pass
+        
+        # 如果Sniffer失败，手动检测最常见的分隔符
+        delimiter_counts = {}
+        lines = sample.split('\n')[:5]  # 只检查前5行
+        
+        for delimiter in common_delimiters:
+            count = 0
+            consistent = True
+            first_line_count = None
+            
+            for line in lines:
+                if line.strip():
+                    line_count = line.count(delimiter)
+                    if first_line_count is None:
+                        first_line_count = line_count
+                    elif line_count != first_line_count and line_count > 0:
+                        consistent = False
+                        break
+                    count += line_count
+            
+            if consistent and count > 0:
+                delimiter_counts[delimiter] = count
+        
+        # 返回出现次数最多的分隔符
+        if delimiter_counts:
+            return max(delimiter_counts, key=delimiter_counts.get)
+        
+        # 默认返回逗号
+        return ','
+        
+    except Exception:
+        return ','
+
 def run_ag_search(keyword, search_path='.'):
     """
     使用ag命令搜索关键字，返回匹配的文件路径列表
@@ -95,7 +145,7 @@ def search_matching_records(data, search_criteria):
     
     return matching_records
 
-def print_results(filepath, fieldnames, matching_records):
+def print_results(filepath, fieldnames, matching_records, delimiter):
     """
     打印搜索结果
     """
@@ -134,7 +184,7 @@ def parse_search_criteria(criteria_str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='使用ag命令搜索CSV文件并提取匹配数据，支持多种分隔符(逗号、管道符、分号等)',
+        description='使用ag命令搜索CSV文件并提取匹配数据',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 使用示例:
@@ -226,7 +276,9 @@ def main():
         else:
             matching_records = search_matching_records(data, search_criteria)
         
-        print_results(csv_file, fieldnames, matching_records)
+        # 获取分隔符用于显示
+        delimiter = detect_csv_delimiter(csv_file)
+        print_results(csv_file, fieldnames, matching_records, delimiter)
         
         # 收集结果用于可能的输出
         for record in matching_records:
@@ -251,4 +303,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
