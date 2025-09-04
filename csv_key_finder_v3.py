@@ -14,16 +14,20 @@ import sys
 
 
 class CompositeKeyFinder:
-    def __init__(self, csv_file_path):
+    def __init__(self, csv_file_path, candidate_fields=None, max_key_length=None):
         """
         初始化组合主键查找器
         
         Args:
             csv_file_path (str): CSV文件路径
+            candidate_fields (list): 候选字段列表，如果为None则使用所有字段
+            max_key_length (int): 最大组合键长度，如果为None则搜索到所有字段
         """
         self.csv_file_path = Path(csv_file_path)
         self.df = None
         self.columns = []
+        self.candidate_fields = candidate_fields
+        self.max_key_length = max_key_length
         self.load_data()
     
     def load_data(self):
@@ -44,8 +48,35 @@ class CompositeKeyFinder:
                 raise Exception("无法使用常见编码格式读取文件")
                 
             self.columns = list(self.df.columns)
+            
+            # 处理候选字段
+            if self.candidate_fields:
+                # 验证候选字段是否存在
+                invalid_fields = [f for f in self.candidate_fields if f not in self.columns]
+                if invalid_fields:
+                    print(f"警告: 以下字段不存在于CSV文件中: {invalid_fields}")
+                
+                # 只保留有效的候选字段
+                self.candidate_fields = [f for f in self.candidate_fields if f in self.columns]
+                if not self.candidate_fields:
+                    print("警告: 没有有效的候选字段，将使用所有字段")
+                    self.candidate_fields = self.columns
+                else:
+                    print(f"使用候选字段: {self.candidate_fields}")
+            else:
+                self.candidate_fields = self.columns
+                print("使用所有字段作为候选字段")
+            
+            # 设置最大组合长度
+            if self.max_key_length is None:
+                self.max_key_length = len(self.candidate_fields)
+            else:
+                self.max_key_length = min(self.max_key_length, len(self.candidate_fields))
+            
             print(f"数据形状: {self.df.shape}")
-            print(f"列名: {self.columns}")
+            print(f"所有列名: {self.columns}")
+            print(f"候选字段: {self.candidate_fields}")
+            print(f"最大组合长度: {self.max_key_length}")
             
         except Exception as e:
             print(f"加载数据失败: {e}")
@@ -83,12 +114,14 @@ class CompositeKeyFinder:
             list: 找到的最小组合主键列表
         """
         print("\n开始查找组合主键...")
+        print(f"搜索范围: {len(self.candidate_fields)} 个候选字段")
+        print(f"最大组合长度: {self.max_key_length}")
         
         # 首先检查单个字段是否能作为主键
         print("\n1. 检查单字段主键:")
         single_key_candidates = []
         
-        for col in self.columns:
+        for col in self.candidate_fields:
             if self.check_uniqueness((col,)):
                 single_key_candidates.append((col,))
                 print(f"   ✓ 单字段主键: [{col}]")
@@ -101,17 +134,19 @@ class CompositeKeyFinder:
         print("   未找到单字段主键，开始查找组合主键...")
         
         # 递归查找不同长度的组合
-        for combo_length in range(2, len(self.columns) + 1):
+        for combo_length in range(2, self.max_key_length + 1):
             print(f"\n2. 检查 {combo_length} 字段组合:")
             
             combo_keys = []
             combo_count = 0
+            total_combinations = len(list(combinations(self.candidate_fields, combo_length)))
+            print(f"   总共需要检查 {total_combinations} 个组合")
             
             # 生成所有可能的组合
-            for combination in combinations(self.columns, combo_length):
+            for combination in combinations(self.candidate_fields, combo_length):
                 combo_count += 1
-                if combo_count % 100 == 0:
-                    print(f"   已检查 {combo_count} 个组合...")
+                if combo_count % 100 == 0 or combo_count % max(1, total_combinations // 10) == 0:
+                    print(f"   已检查 {combo_count}/{total_combinations} 个组合 ({combo_count/total_combinations*100:.1f}%)")
                 
                 if self.check_uniqueness(combination):
                     combo_keys.append(combination)
@@ -121,7 +156,7 @@ class CompositeKeyFinder:
                 print(f"\n找到 {len(combo_keys)} 个 {combo_length} 字段组合主键")
                 return combo_keys
         
-        print("\n❌ 未找到任何有效的组合主键")
+        print("\n❌ 在指定范围内未找到任何有效的组合主键")
         return []
     
     def analyze_data_quality(self):
@@ -129,20 +164,113 @@ class CompositeKeyFinder:
         print("\n=== 数据质量分析 ===")
         print(f"总记录数: {len(self.df)}")
         print(f"总字段数: {len(self.columns)}")
+        print(f"候选字段数: {len(self.candidate_fields)}")
         
-        # 检查空值
-        print("\n空值统计:")
-        null_counts = self.df.isnull().sum()
+        # 检查空值（只针对候选字段）
+        print("\n候选字段空值统计:")
+        null_counts = self.df[self.candidate_fields].isnull().sum()
         for col, count in null_counts.items():
             if count > 0:
                 print(f"   {col}: {count} ({count/len(self.df)*100:.2f}%)")
+            else:
+                print(f"   {col}: 无空值")
         
-        # 检查各字段的唯一值数量
-        print("\n各字段唯一值统计:")
-        for col in self.columns:
+        # 检查各候选字段的唯一值数量
+        print("\n候选字段唯一值统计:")
+        for col in self.candidate_fields:
             unique_count = self.df[col].nunique()
             duplicate_rate = (len(self.df) - unique_count) / len(self.df) * 100
             print(f"   {col}: {unique_count} 个唯一值 (重复率: {duplicate_rate:.2f}%)")
+            
+        # 显示候选字段的基本统计信息
+        print("\n候选字段类型信息:")
+        for col in self.candidate_fields:
+            dtype = self.df[col].dtype
+            sample_values = self.df[col].dropna().head(3).tolist()
+            print(f"   {col}: {dtype} (示例: {sample_values})")
+    
+    def interactive_field_selection(self):
+        """交互式选择候选字段"""
+        print(f"\n可用字段 (共 {len(self.columns)} 个):")
+        for i, col in enumerate(self.columns, 1):
+            unique_count = self.df[col].nunique()
+            null_count = self.df[col].isnull().sum()
+            print(f"  {i:2d}. {col} (唯一值: {unique_count}, 空值: {null_count})")
+        
+        print("\n选择候选字段的方式:")
+        print("1. 输入字段编号 (例如: 1,3,5-7)")
+        print("2. 输入字段名称 (例如: name,id,date)")
+        print("3. 直接回车使用所有字段")
+        
+        selection = input("\n请输入选择: ").strip()
+        
+        if not selection:
+            return self.columns
+        
+        selected_fields = []
+        
+        # 尝试解析为数字编号
+        if any(c.isdigit() for c in selection):
+            try:
+                parts = selection.split(',')
+                for part in parts:
+                    part = part.strip()
+                    if '-' in part:
+                        # 处理范围选择 (如 1-3)
+                        start, end = map(int, part.split('-'))
+                        for i in range(start, end + 1):
+                            if 1 <= i <= len(self.columns):
+                                selected_fields.append(self.columns[i-1])
+                    else:
+                        # 处理单个编号
+                        i = int(part)
+                        if 1 <= i <= len(self.columns):
+                            selected_fields.append(self.columns[i-1])
+            except ValueError:
+                print("编号格式错误，使用所有字段")
+                return self.columns
+        else:
+            # 尝试解析为字段名称
+            field_names = [name.strip() for name in selection.split(',')]
+            for name in field_names:
+                if name in self.columns:
+                    selected_fields.append(name)
+                else:
+                    print(f"警告: 字段 '{name}' 不存在")
+        
+        if not selected_fields:
+            print("未选择有效字段，使用所有字段")
+            return self.columns
+        
+        # 去重并保持顺序
+        selected_fields = list(dict.fromkeys(selected_fields))
+        print(f"已选择 {len(selected_fields)} 个字段: {selected_fields}")
+        
+        return selected_fields
+    
+    def interactive_max_length_selection(self):
+        """交互式选择最大组合长度"""
+        max_possible = len(self.candidate_fields)
+        print(f"\n候选字段数量: {max_possible}")
+        print("建议的最大组合长度:")
+        print("  1-2: 查找简单主键")
+        print("  3-4: 查找中等复杂度主键")
+        print(f"  {max_possible}: 搜索所有可能组合（可能很慢）")
+        
+        while True:
+            try:
+                selection = input(f"\n请输入最大组合长度 (1-{max_possible}, 直接回车默认为 {min(4, max_possible)}): ").strip()
+                
+                if not selection:
+                    return min(4, max_possible)
+                
+                max_length = int(selection)
+                if 1 <= max_length <= max_possible:
+                    return max_length
+                else:
+                    print(f"请输入 1 到 {max_possible} 之间的数字")
+            except ValueError:
+                print("请输入有效的数字")
     
     def generate_report(self, composite_keys):
         """生成详细报告"""
@@ -239,7 +367,7 @@ def main():
             # 根据参数创建查找器
             if args.interactive:
                 # 交互式模式下，先创建临时查找器获取字段信息
-                temp_finder = CompositeKeyFinder(csv_file)
+                temp_finder = CompositeKeyFinder(csv_file, None, None)
                 
                 print("\n=== 交互式配置 ===")
                 
@@ -286,7 +414,7 @@ if __name__ == "__main__":
         
         try:
             # 先创建基本的查找器来获取字段信息
-            temp_finder = CompositeKeyFinder(file_path)
+            temp_finder = CompositeKeyFinder(file_path, None, None)
             
             # 交互式选择候选字段
             print("\n=== 字段选择 ===")
@@ -294,6 +422,7 @@ if __name__ == "__main__":
             
             # 交互式选择最大组合长度
             print("\n=== 参数设置 ===")
+            temp_finder.candidate_fields = candidate_fields
             max_length = temp_finder.interactive_max_length_selection()
             
             # 创建配置好的查找器
@@ -311,3 +440,4 @@ if __name__ == "__main__":
             print(f"错误: {e}")
     else:
         main()
+

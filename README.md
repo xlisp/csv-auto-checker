@@ -288,3 +288,15 @@ HTML Report: comparison_report.html
 (base) ➜  csv-auto-checker git:(main)
 
 ```
+
+```
+# 基本使用（所有字段，默认最大组合长度）
+python csv_key_finder_fixed.py ~/Desktop/test_employee_data_20250904_115443.csv
+
+# 限制最大组合长度为2
+python csv_key_finder_fixed.py ~/Desktop/test_employee_data_20250904_115443.csv --max-length 2
+
+# 包含数据分析
+python csv_key_finder_fixed.py ~/Desktop/test_employee_data_20250904_115443.csv --analyze
+
+```
