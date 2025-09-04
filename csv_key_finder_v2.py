@@ -236,19 +236,32 @@ def main():
         print('='*80)
         
         try:
-            finder = CompositeKeyFinder(csv_file, candidate_fields, args.max_length)
-            
-            # 交互式模式
+            # 根据参数创建查找器
             if args.interactive:
+                # 交互式模式下，先创建临时查找器获取字段信息
+                temp_finder = CompositeKeyFinder(csv_file)
+                
                 print("\n=== 交互式配置 ===")
                 
                 # 选择候选字段
                 if not candidate_fields:
-                    finder.candidate_fields = finder.interactive_field_selection()
+                    selected_fields = temp_finder.interactive_field_selection()
+                else:
+                    selected_fields = candidate_fields
                 
                 # 选择最大组合长度
                 if not args.max_length:
-                    finder.max_key_length = finder.interactive_max_length_selection()
+                    # 更新候选字段后重新计算最大长度
+                    temp_finder.candidate_fields = selected_fields
+                    max_length = temp_finder.interactive_max_length_selection()
+                else:
+                    max_length = args.max_length
+                
+                # 创建配置好的查找器
+                finder = CompositeKeyFinder(csv_file, selected_fields, max_length)
+            else:
+                # 非交互式模式
+                finder = CompositeKeyFinder(csv_file, candidate_fields, args.max_length)
             
             if args.analyze:
                 finder.analyze_data_quality()
@@ -298,4 +311,3 @@ if __name__ == "__main__":
             print(f"错误: {e}")
     else:
         main()
-
