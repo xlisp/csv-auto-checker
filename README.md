@@ -306,16 +306,31 @@ python csv_key_finder_fixed.py ~/Desktop/test_employee_data_20250904_115443.csv 
 # 查找csv文件：ag grep key1 key2 ...
 
 ```
-✗ python find_csv_by_ag_grep_v2.py shipped "user_id=1003,product_id=P003" --path /Users/xlisp/Desktop/csv_path
+python find_csv_by_ag_grep_v3.py shipped "user_id=1003,product_id=P003" --path /Users/xlisp/Desktop/csv_path
 正在搜索包含关键字 'shipped' 的CSV文件...
-找到 2 个CSV文件:
-  /Users/xlisp/Desktop/csv_path/file2.csv
+找到 4 个CSV文件:
+  /Users/xlisp/Desktop/csv_path/file3.csv
+  /Users/xlisp/Desktop/csv_path/file5.csv
   /Users/xlisp/Desktop/csv_path/file1.csv
+  /Users/xlisp/Desktop/csv_path/file2.csv
 搜索条件: {'user_id': '1003', 'product_id': 'P003'}
 
-文件: /Users/xlisp/Desktop/csv_path/file2.csv
+文件: /Users/xlisp/Desktop/csv_path/file3.csv
 字段名: user_id, product_id, quantity, price, purchase_date, status
 匹配记录数: 0
+
+文件: /Users/xlisp/Desktop/csv_path/file5.csv
+字段名: user_id, product_id, quantity, price, purchase_date, status
+匹配记录数: 1
+
+匹配的记录:
+  记录 1:
+    user_id: 1003
+    product_id: P003
+    quantity: 1
+    price: 79.88
+    purchase_date: 2024-01-28
+    status: shipped
 
 文件: /Users/xlisp/Desktop/csv_path/file1.csv
 字段名: user_id, product_id, quantity, price, purchase_date, status
@@ -330,6 +345,11 @@ python csv_key_finder_fixed.py ~/Desktop/test_employee_data_20250904_115443.csv 
     purchase_date: 2024-01-28
     status: shipped
 
-总共找到 1 条匹配记录
+文件: /Users/xlisp/Desktop/csv_path/file2.csv
+字段名: user_id, product_id, quantity, price, purchase_date, status
+匹配记录数: 0
+
+总共找到 2 条匹配记录
 
 ```
+

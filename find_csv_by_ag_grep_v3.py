@@ -14,7 +14,7 @@ def run_ag_search(keyword, search_path='.'):
     """
     try:
         # 使用ag命令搜索，只返回包含关键字的CSV文件
-        cmd = ['ag', '-l', '--csv', keyword, search_path]
+        cmd = ['ag', '-l', keyword, search_path]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
         # 过滤出CSV文件
