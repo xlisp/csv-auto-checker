@@ -18,7 +18,7 @@ public class CSVComparator {
     
     private final List<String> primaryKeys;
     private final double sampleRate;
-    private final List<String> excludeFields;
+    private final Set<String> excludeFields;
     private ComparisonResult comparisonResults;
     
     /**
@@ -31,7 +31,7 @@ public class CSVComparator {
     public CSVComparator(List<String> primaryKeys, double sampleRate, List<String> excludeFields) {
         this.primaryKeys = primaryKeys;
         this.sampleRate = sampleRate;
-        this.excludeFields = excludeFields != null ? excludeFields : new ArrayList<>();
+        this.excludeFields = excludeFields != null ? new HashSet<>(excludeFields) : new HashSet<>();
         configureLogger();
     }
     
@@ -59,11 +59,14 @@ public class CSVComparator {
             String line;
             
             while ((line = br.readLine()) != null) {
-                String[] values = parseCSVLine(line);
-                Map<String, String> row = new HashMap<>();
+                if (line.trim().isEmpty()) continue;
                 
-                for (int i = 0; i < Math.min(headers.length, values.length); i++) {
-                    row.put(headers[i].trim(), values[i].trim());
+                String[] values = parseCSVLine(line);
+                Map<String, String> row = new LinkedHashMap<>();
+                
+                for (int i = 0; i < headers.length; i++) {
+                    String value = i < values.length ? values[i].trim() : "";
+                    row.put(headers[i].trim(), value);
                 }
                 data.add(row);
             }
@@ -85,7 +88,12 @@ public class CSVComparator {
             char c = line.charAt(i);
             
             if (c == '"') {
-                inQuotes = !inQuotes;
+                if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                    current.append('"');
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
             } else if (c == ',' && !inQuotes) {
                 result.add(current.toString());
                 current = new StringBuilder();
@@ -115,14 +123,27 @@ public class CSVComparator {
      * 智能抽样策略
      */
     private SampledData intelligentSampling(List<Map<String, String>> data1, List<Map<String, String>> data2) {
-        Map<String, Map<String, String>> map1 = data1.stream()
-            .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
-        Map<String, Map<String, String>> map2 = data2.stream()
-            .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
+        Map<String, Map<String, String>> map1 = new LinkedHashMap<>();
+        Map<String, Map<String, String>> map2 = new LinkedHashMap<>();
         
-        Set<String> commonKeys = new HashSet<>(map1.keySet());
+        for (Map<String, String> row : data1) {
+            String key = createCompositeKey(row);
+            map1.put(key, row);
+        }
+        
+        for (Map<String, String> row : data2) {
+            String key = createCompositeKey(row);
+            map2.put(key, row);
+        }
+        
+        Set<String> commonKeys = new LinkedHashSet<>(map1.keySet());
         commonKeys.retainAll(map2.keySet());
         
+        // 打印示例主键
+        List<String> keys1Example = map1.keySet().stream().limit(3).collect(Collectors.toList());
+        List<String> keys2Example = map2.keySet().stream().limit(3).collect(Collectors.toList());
+        logger.info("文件1中的主键示例: " + keys1Example);
+        logger.info("文件2中的主键示例: " + keys2Example);
         logger.info("找到 " + commonKeys.size() + " 个共同主键");
         
         if (commonKeys.isEmpty()) {
@@ -152,7 +173,7 @@ public class CSVComparator {
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
         
-        logger.info("智能抽样完成: " + sampledKeys.size() + " 个主键");
+        logger.info("智能抽样完成: " + sampledKeys.size() + " 个主键, " + sampled1.size() + " + " + sampled2.size() + " 行数据");
         return new SampledData(sampled1, sampled2);
     }
     
@@ -168,21 +189,29 @@ public class CSVComparator {
     private ComparisonResult parallelCompare(List<Map<String, String>> data1, List<Map<String, String>> data2) 
             throws InterruptedException, ExecutionException {
         
-        Map<String, Map<String, String>> map1 = data1.stream()
-            .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
-        Map<String, Map<String, String>> map2 = data2.stream()
-            .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
+        Map<String, Map<String, String>> map1 = new LinkedHashMap<>();
+        Map<String, Map<String, String>> map2 = new LinkedHashMap<>();
         
-        Set<String> allKeys = new HashSet<>(map1.keySet());
+        for (Map<String, String> row : data1) {
+            String key = createCompositeKey(row);
+            map1.put(key, row);
+        }
+        
+        for (Map<String, String> row : data2) {
+            String key = createCompositeKey(row);
+            map2.put(key, row);
+        }
+        
+        Set<String> allKeys = new LinkedHashSet<>(map1.keySet());
         allKeys.addAll(map2.keySet());
         
-        Set<String> commonKeys = new HashSet<>(map1.keySet());
+        Set<String> commonKeys = new LinkedHashSet<>(map1.keySet());
         commonKeys.retainAll(map2.keySet());
         
-        Set<String> onlyInData1 = new HashSet<>(map1.keySet());
+        Set<String> onlyInData1 = new LinkedHashSet<>(map1.keySet());
         onlyInData1.removeAll(map2.keySet());
         
-        Set<String> onlyInData2 = new HashSet<>(map2.keySet());
+        Set<String> onlyInData2 = new LinkedHashSet<>(map2.keySet());
         onlyInData2.removeAll(map1.keySet());
         
         ComparisonResult result = new ComparisonResult();
@@ -232,14 +261,24 @@ public class CSVComparator {
             if (row1 == null || row2 == null) continue;
             
             List<FieldDifference> fieldDiffs = new ArrayList<>();
-            Set<String> allFields = new HashSet<>(row1.keySet());
-            allFields.addAll(row2.keySet());
             
-            for (String field : allFields) {
-                if (excludeFields.contains(field)) continue;
+            // 获取所有需要比较的字段（排除主键和排除字段）
+            Set<String> fieldsToCompare = new LinkedHashSet<>();
+            fieldsToCompare.addAll(row1.keySet());
+            fieldsToCompare.addAll(row2.keySet());
+            
+            for (String field : fieldsToCompare) {
+                // 跳过排除的字段
+                if (excludeFields.contains(field)) {
+                    continue;
+                }
                 
                 String val1 = row1.getOrDefault(field, "");
                 String val2 = row2.getOrDefault(field, "");
+                
+                // 处理空值：将null或空字符串统一处理
+                if (val1 == null) val1 = "";
+                if (val2 == null) val2 = "";
                 
                 if (!val1.equals(val2)) {
                     fieldDiffs.add(new FieldDifference(field, val1, val2));
@@ -321,8 +360,8 @@ public class CSVComparator {
         
         html.append("    <div class=\"header\">\n");
         html.append("        <h1>CSV文件对比报告</h1>\n");
-        html.append("        <p><strong>文件1:</strong> ").append(file1).append("</p>\n");
-        html.append("        <p><strong>文件2:</strong> ").append(file2).append("</p>\n");
+        html.append("        <p><strong>文件1:</strong> ").append(escapeHtml(file1)).append("</p>\n");
+        html.append("        <p><strong>文件2:</strong> ").append(escapeHtml(file2)).append("</p>\n");
         html.append("        <p><strong>对比时间:</strong> ");
         html.append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         html.append("</p>\n");
@@ -375,7 +414,7 @@ public class CSVComparator {
         html.append("    </div>\n");
         
         // 字段差异统计
-        Map<String, Integer> fieldDiffCount = new HashMap<>();
+        Map<String, Integer> fieldDiffCount = new LinkedHashMap<>();
         for (RowDifference diff : result.differences) {
             for (FieldDifference fieldDiff : diff.differences) {
                 if (!excludeFields.contains(fieldDiff.field)) {
@@ -403,6 +442,7 @@ public class CSVComparator {
     }
     
     private String escapeHtml(String text) {
+        if (text == null) return "";
         return text.replace("&", "&amp;")
                    .replace("<", "&lt;")
                    .replace(">", "&gt;")
@@ -437,6 +477,7 @@ public class CSVComparator {
     }
     
     private String escapeCsv(String text) {
+        if (text == null) return "";
         return text.replace("\"", "\"\"");
     }
     
@@ -491,13 +532,14 @@ public class CSVComparator {
      * 命令行主函数
      */
     public static void main(String[] args) {
-        if (args.length < 4) {
-            System.out.println("用法: java CSVComparator <文件1> <文件2> <主键1> [主键2...] [选项]");
+        if (args.length < 2) {
+            System.out.println("用法: java CSVComparator <文件1> <文件2> [选项]");
             System.out.println("选项:");
-            System.out.println("  --exclude <字段1> [字段2...]  排除不比较的字段");
-            System.out.println("  --sample-rate <0-1>           抽样率");
-            System.out.println("  --output <文件>               输出HTML报告路径");
-            System.out.println("  --export-csv <文件>           导出差异数据CSV路径");
+            System.out.println("  --keys <主键1> [主键2...]    主键列名（必须）");
+            System.out.println("  --exclude <字段1> [字段2...] 排除不比较的字段");
+            System.out.println("  --sample-rate <0-1>          抽样率");
+            System.out.println("  --output <文件>              输出HTML报告路径");
+            System.out.println("  --export-csv <文件>          导出差异数据CSV路径");
             System.exit(1);
         }
         
@@ -510,26 +552,31 @@ public class CSVComparator {
             String outputHtml = "comparison_report.html";
             String exportCsv = null;
             
-            // 解析主键
-            int i = 2;
-            while (i < args.length && !args[i].startsWith("--")) {
-                primaryKeys.add(args[i++]);
-            }
-            
             // 解析选项
+            int i = 2;
             while (i < args.length) {
                 switch (args[i]) {
-                    case "--exclude":
+                    case "--keys":
+                    case "-k":
                         i++;
-                        while (i < args.length && !args[i].startsWith("--")) {
+                        while (i < args.length && !args[i].startsWith("--") && !args[i].startsWith("-")) {
+                            primaryKeys.add(args[i++]);
+                        }
+                        break;
+                    case "--exclude":
+                    case "-e":
+                        i++;
+                        while (i < args.length && !args[i].startsWith("--") && !args[i].startsWith("-")) {
                             excludeFields.add(args[i++]);
                         }
                         break;
                     case "--sample-rate":
+                    case "-s":
                         sampleRate = Double.parseDouble(args[++i]);
                         i++;
                         break;
                     case "--output":
+                    case "-o":
                         outputHtml = args[++i];
                         i++;
                         break;
@@ -538,8 +585,15 @@ public class CSVComparator {
                         i++;
                         break;
                     default:
+                        System.err.println("未知选项: " + args[i]);
                         i++;
                 }
+            }
+            
+            // 验证主键参数
+            if (primaryKeys.isEmpty()) {
+                System.err.println("错误: 必须使用 --keys 指定至少一个主键");
+                System.exit(1);
             }
             
             CSVComparator comparator = new CSVComparator(primaryKeys, sampleRate, excludeFields);
