@@ -353,3 +353,71 @@ python find_csv_by_ag_grep_v3.py shipped "user_id=1003,product_id=P003" --path /
 
 ```
 
+--- 
+
+### Java版本：
+
+
+```
+base ❯ javac CSVComparator.java
+
+
+~/PyPro/csv-auto-checker main*
+base ❯ java CSVComparator file1.csv file2.csv --keys user_id product_id --exclude quantity purchase_date
+Oct 29, 2025 2:19:24 PM CSVComparator compareCSVs
+INFO: 开始CSV对比流程
+Oct 29, 2025 2:19:24 PM CSVComparator compareCSVs
+INFO: 开始CSV对比流程
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 开始加载CSV文件: file1.csv
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 开始加载CSV文件: file1.csv
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 成功加载 10 行数据
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 成功加载 10 行数据
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 开始加载CSV文件: file2.csv
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 开始加载CSV文件: file2.csv
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 成功加载 10 行数据
+Oct 29, 2025 2:19:24 PM CSVComparator loadCSV
+INFO: 成功加载 10 行数据
+Oct 29, 2025 2:19:24 PM CSVComparator compareCSVs
+INFO: 排除比较的字段: quantity, purchase_date
+Oct 29, 2025 2:19:24 PM CSVComparator compareCSVs
+INFO: 排除比较的字段: quantity, purchase_date
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 文件1中的主键示例: [1001|P001, 1001|P002, 1002|P001]
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 文件1中的主键示例: [1001|P001, 1001|P002, 1002|P001]
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 文件2中的主键示例: [1001|P001, 1001|P002, 1002|P001]
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 文件2中的主键示例: [1001|P001, 1001|P002, 1002|P001]
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 找到 8 个共同主键
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 找到 8 个共同主键
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 智能抽样完成: 8 个主键, 8 + 8 行数据
+Oct 29, 2025 2:19:24 PM CSVComparator intelligentSampling
+INFO: 智能抽样完成: 8 个主键, 8 + 8 行数据
+Oct 29, 2025 2:19:24 PM CSVComparator parallelCompare
+INFO: 对比完成: 8 个共同主键
+Oct 29, 2025 2:19:24 PM CSVComparator parallelCompare
+INFO: 对比完成: 8 个共同主键
+Oct 29, 2025 2:19:24 PM CSVComparator generateHTMLReport
+INFO: HTML报告已生成: comparison_report.html
+Oct 29, 2025 2:19:24 PM CSVComparator generateHTMLReport
+INFO: HTML报告已生成: comparison_report.html
+
+=== 对比完成 ===
+总主键数: 8
+共同主键数: 8
+相同行数: 5
+差异行数: 3
+HTML报告: comparison_report.html
+
+```
