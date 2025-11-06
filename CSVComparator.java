@@ -1,99 +1,75 @@
 import java.io.*;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.stream.Collectors;
-import java.util.logging.*;
 
 /**
- * CSV自动对比工具 - Java版本
- * 基于主键的高性能CSV对比，生成HTML报告显示差异
+ * High-Performance CSV Comparison Tool - Java 8 Version
+ * Modified: Removed parallel processing, added field grouping
  */
 public class CSVComparator {
-    
-    private static final Logger logger = Logger.getLogger(CSVComparator.class.getName());
     
     private final List<String> primaryKeys;
     private final double sampleRate;
     private final Set<String> excludeFields;
     private ComparisonResult comparisonResults;
     
-    /**
-     * 构造函数
-     * 
-     * @param primaryKeys 主键列名列表（支持组合主键）
-     * @param sampleRate 智能抽样率（0-1之间）
-     * @param excludeFields 排除不比较的字段列表
-     */
     public CSVComparator(List<String> primaryKeys, double sampleRate, List<String> excludeFields) {
         this.primaryKeys = primaryKeys;
         this.sampleRate = sampleRate;
         this.excludeFields = excludeFields != null ? new HashSet<>(excludeFields) : new HashSet<>();
-        configureLogger();
-    }
-    
-    private void configureLogger() {
-        ConsoleHandler handler = new ConsoleHandler();
-        handler.setFormatter(new SimpleFormatter());
-        logger.addHandler(handler);
-        logger.setLevel(Level.INFO);
     }
     
     /**
-     * 加载CSV文件
+     * Load large CSV files in chunks
      */
     public List<Map<String, String>> loadCSV(String filePath) throws IOException {
-        logger.info("开始加载CSV文件: " + filePath);
+        log("Loading CSV file: " + filePath);
         List<Map<String, String>> data = new ArrayList<>();
         
-        try (BufferedReader br = Files.newBufferedReader(Paths.get(filePath), StandardCharsets.UTF_8)) {
+        try (BufferedReader br = new BufferedReader(
+                new InputStreamReader(new FileInputStream(filePath), StandardCharsets.UTF_8))) {
+            
             String headerLine = br.readLine();
             if (headerLine == null) {
-                throw new IOException("CSV文件为空");
+                throw new IOException("CSV file is empty");
             }
             
-            String[] headers = parseCSVLine(headerLine);
+            String[] headers = parseCsvLine(headerLine);
             String line;
             
             while ((line = br.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
-                
-                String[] values = parseCSVLine(line);
+                String[] values = parseCsvLine(line);
                 Map<String, String> row = new LinkedHashMap<>();
                 
-                for (int i = 0; i < headers.length; i++) {
-                    String value = i < values.length ? values[i].trim() : "";
-                    row.put(headers[i].trim(), value);
+                for (int i = 0; i < headers.length && i < values.length; i++) {
+                    row.put(headers[i].trim(), values[i].trim());
                 }
                 data.add(row);
             }
         }
         
-        logger.info("成功加载 " + data.size() + " 行数据");
+        log("Successfully loaded " + data.size() + " rows");
         return data;
     }
     
     /**
-     * 解析CSV行（处理引号和逗号）
+     * Parse CSV line (handle quotes and commas)
      */
-    private String[] parseCSVLine(String line) {
+    private String[] parseCsvLine(String line) {
         List<String> result = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
         boolean inQuotes = false;
+        StringBuilder current = new StringBuilder();
         
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             
             if (c == '"') {
-                if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
-                    current.append('"');
-                    i++;
-                } else {
-                    inQuotes = !inQuotes;
-                }
+                inQuotes = !inQuotes;
             } else if (c == ',' && !inQuotes) {
                 result.add(current.toString());
                 current = new StringBuilder();
@@ -107,112 +83,129 @@ public class CSVComparator {
     }
     
     /**
-     * 创建组合主键
+     * Create composite primary key
      */
     private String createCompositeKey(Map<String, String> row) {
         if (primaryKeys.size() == 1) {
-            return row.getOrDefault(primaryKeys.get(0), "");
-        } else {
-            return primaryKeys.stream()
-                .map(key -> row.getOrDefault(key, ""))
-                .collect(Collectors.joining("|"));
+            return normalizeValue(row.get(primaryKeys.get(0)));
         }
+        
+        return primaryKeys.stream()
+                .map(key -> normalizeValue(row.get(key)))
+                .collect(Collectors.joining("|"));
     }
     
     /**
-     * 智能抽样策略
+     * Normalize numeric values (handle scientific notation, ensure positive/negative consistency)
+     * Treats values like 0.0, .00, 0.00, 0 as identical
      */
-    private SampledData intelligentSampling(List<Map<String, String>> data1, List<Map<String, String>> data2) {
-        Map<String, Map<String, String>> map1 = new LinkedHashMap<>();
-        Map<String, Map<String, String>> map2 = new LinkedHashMap<>();
-        
-        for (Map<String, String> row : data1) {
-            String key = createCompositeKey(row);
-            map1.put(key, row);
+    private String normalizeValue(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
         }
         
-        for (Map<String, String> row : data2) {
-            String key = createCompositeKey(row);
-            map2.put(key, row);
+        // Try to parse as numeric value
+        try {
+            // Remove leading/trailing spaces
+            value = value.trim();
+            
+            // Check if it's a number (including scientific notation)
+            if (value.matches("^[+-]?\\d+\\.?\\d*[eE][+-]?\\d+$") || 
+                value.matches("^[+-]?\\.?\\d+\\.?\\d*$")) {
+                
+                BigDecimal bd = new BigDecimal(value);
+                
+                // Compare with zero to normalize 0.0, .00, 0.00, etc. to "0"
+                if (bd.compareTo(BigDecimal.ZERO) == 0) {
+                    return "0";
+                }
+                
+                // Convert to plain string and remove trailing zeros
+                return bd.stripTrailingZeros().toPlainString();
+            }
+        } catch (NumberFormatException e) {
+            // Not a number, return original value
         }
         
-        Set<String> commonKeys = new LinkedHashSet<>(map1.keySet());
+        return value;
+    }
+    
+    /**
+     * Intelligent sampling strategy
+     */
+    public SampledData intelligentSampling(List<Map<String, String>> data1, 
+                                          List<Map<String, String>> data2) {
+        
+        // Create primary key mapping
+        Map<String, Map<String, String>> map1 = data1.stream()
+                .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
+        
+        Map<String, Map<String, String>> map2 = data2.stream()
+                .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
+        
+        // Find common keys
+        Set<String> commonKeys = new HashSet<>(map1.keySet());
         commonKeys.retainAll(map2.keySet());
         
-        // 打印示例主键
-        List<String> keys1Example = map1.keySet().stream().limit(3).collect(Collectors.toList());
-        List<String> keys2Example = map2.keySet().stream().limit(3).collect(Collectors.toList());
-        logger.info("文件1中的主键示例: " + keys1Example);
-        logger.info("文件2中的主键示例: " + keys2Example);
-        logger.info("找到 " + commonKeys.size() + " 个共同主键");
+        log("Found " + commonKeys.size() + " common primary keys");
         
         if (commonKeys.isEmpty()) {
-            logger.warning("未找到共同的主键，使用随机抽样");
-            int sampleSize = (int) (Math.min(data1.size(), data2.size()) * sampleRate);
-            return new SampledData(
-                randomSample(data1, sampleSize),
-                randomSample(data2, sampleSize)
-            );
+            log("Warning: No common primary keys found");
+            return new SampledData(new ArrayList<>(), new ArrayList<>(), new HashSet<>());
         }
         
-        List<String> sampledKeys;
+        // Sample
+        Set<String> sampledKeys;
         if (sampleRate >= 1.0 || commonKeys.size() <= 100) {
-            sampledKeys = new ArrayList<>(commonKeys);
+            sampledKeys = commonKeys;
         } else {
             int sampleSize = (int) (commonKeys.size() * sampleRate);
-            sampledKeys = randomSample(new ArrayList<>(commonKeys), sampleSize);
+            List<String> keyList = new ArrayList<>(commonKeys);
+            Collections.shuffle(keyList);
+            sampledKeys = new HashSet<>(keyList.subList(0, sampleSize));
         }
         
+        // Filter data
         List<Map<String, String>> sampled1 = sampledKeys.stream()
-            .map(map1::get)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toList());
+                .map(map1::get)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
         
         List<Map<String, String>> sampled2 = sampledKeys.stream()
-            .map(map2::get)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toList());
+                .map(map2::get)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
         
-        logger.info("智能抽样完成: " + sampledKeys.size() + " 个主键, " + sampled1.size() + " + " + sampled2.size() + " 行数据");
-        return new SampledData(sampled1, sampled2);
-    }
-    
-    private <T> List<T> randomSample(List<T> list, int sampleSize) {
-        List<T> copy = new ArrayList<>(list);
-        Collections.shuffle(copy);
-        return copy.subList(0, Math.min(sampleSize, copy.size()));
+        log("Intelligent sampling completed: " + sampledKeys.size() + " keys");
+        
+        return new SampledData(sampled1, sampled2, sampledKeys);
     }
     
     /**
-     * 并行对比数据
+     * Sequential data comparison (removed parallel processing)
      */
-    private ComparisonResult parallelCompare(List<Map<String, String>> data1, List<Map<String, String>> data2) 
-            throws InterruptedException, ExecutionException {
+    public ComparisonResult sequentialCompare(List<Map<String, String>> data1,
+                                             List<Map<String, String>> data2) {
         
-        Map<String, Map<String, String>> map1 = new LinkedHashMap<>();
-        Map<String, Map<String, String>> map2 = new LinkedHashMap<>();
+        // Create index
+        Map<String, Map<String, String>> indexed1 = data1.stream()
+                .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
         
-        for (Map<String, String> row : data1) {
-            String key = createCompositeKey(row);
-            map1.put(key, row);
-        }
+        Map<String, Map<String, String>> indexed2 = data2.stream()
+                .collect(Collectors.toMap(this::createCompositeKey, row -> row, (a, b) -> a));
         
-        for (Map<String, String> row : data2) {
-            String key = createCompositeKey(row);
-            map2.put(key, row);
-        }
+        // Calculate common keys
+        Set<String> allKeys = new HashSet<>(indexed1.keySet());
+        allKeys.addAll(indexed2.keySet());
         
-        Set<String> allKeys = new LinkedHashSet<>(map1.keySet());
-        allKeys.addAll(map2.keySet());
+        Set<String> commonKeys = new HashSet<>(indexed1.keySet());
+        commonKeys.retainAll(indexed2.keySet());
         
-        Set<String> commonKeys = new LinkedHashSet<>(map1.keySet());
-        commonKeys.retainAll(map2.keySet());
+        Set<String> onlyInData1 = new HashSet<>(indexed1.keySet());
+        onlyInData1.removeAll(indexed2.keySet());
         
-        Set<String> onlyInData1 = new LinkedHashSet<>(map1.keySet());
-        onlyInData1.removeAll(map2.keySet());
-        
-        Set<String> onlyInData2 = new LinkedHashSet<>(map2.keySet());
-        onlyInData2.removeAll(map1.keySet());
+        Set<String> onlyInData2 = new HashSet<>(indexed2.keySet());
+        onlyInData2.removeAll(indexed1.keySet());
         
         ComparisonResult result = new ComparisonResult();
         result.totalKeys = allKeys.size();
@@ -220,225 +213,322 @@ public class CSVComparator {
         result.onlyInData1 = onlyInData1.size();
         result.onlyInData2 = onlyInData2.size();
         
-        // 并行处理
-        int processors = Runtime.getRuntime().availableProcessors();
-        ExecutorService executor = Executors.newFixedThreadPool(processors);
-        List<Future<ChunkResult>> futures = new ArrayList<>();
+        // Sequential comparison
+        log("Starting sequential comparison of " + commonKeys.size() + " common keys");
         
-        List<String> keyList = new ArrayList<>(commonKeys);
-        int chunkSize = 1000;
-        
-        for (int i = 0; i < keyList.size(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, keyList.size());
-            List<String> chunk = keyList.subList(i, end);
-            futures.add(executor.submit(() -> compareChunk(map1, map2, chunk)));
-        }
-        
-        for (Future<ChunkResult> future : futures) {
-            ChunkResult chunkResult = future.get();
-            result.differences.addAll(chunkResult.differences);
-            result.identicalRows += chunkResult.identicalRows;
-        }
-        
-        executor.shutdown();
-        logger.info("对比完成: " + result.commonKeys + " 个共同主键");
-        
-        return result;
-    }
-    
-    /**
-     * 对比数据块
-     */
-    private ChunkResult compareChunk(Map<String, Map<String, String>> map1, 
-                                    Map<String, Map<String, String>> map2, 
-                                    List<String> keys) {
-        ChunkResult result = new ChunkResult();
-        
-        for (String key : keys) {
-            Map<String, String> row1 = map1.get(key);
-            Map<String, String> row2 = map2.get(key);
+        int processed = 0;
+        for (String key : commonKeys) {
+            Map<String, String> row1 = indexed1.get(key);
+            Map<String, String> row2 = indexed2.get(key);
             
-            if (row1 == null || row2 == null) continue;
+            if (row1 == null || row2 == null) {
+                continue;
+            }
             
             List<FieldDifference> fieldDiffs = new ArrayList<>();
             
-            // 获取所有需要比较的字段（排除主键和排除字段）
-            Set<String> fieldsToCompare = new LinkedHashSet<>();
-            fieldsToCompare.addAll(row1.keySet());
-            fieldsToCompare.addAll(row2.keySet());
+            // Compare each field
+            Set<String> allFields = new HashSet<>(row1.keySet());
+            allFields.addAll(row2.keySet());
             
-            for (String field : fieldsToCompare) {
-                // 跳过排除的字段
-                if (excludeFields.contains(field)) {
+            for (String field : allFields) {
+                if (excludeFields.contains(field) || primaryKeys.contains(field)) {
                     continue;
                 }
                 
-                String val1 = row1.getOrDefault(field, "");
-                String val2 = row2.getOrDefault(field, "");
-                
-                // 处理空值：将null或空字符串统一处理
-                if (val1 == null) val1 = "";
-                if (val2 == null) val2 = "";
+                String val1 = normalizeValue(row1.getOrDefault(field, ""));
+                String val2 = normalizeValue(row2.getOrDefault(field, ""));
                 
                 if (!val1.equals(val2)) {
-                    fieldDiffs.add(new FieldDifference(field, val1, val2));
+                    fieldDiffs.add(new FieldDifference(field, 
+                            row1.getOrDefault(field, ""), 
+                            row2.getOrDefault(field, "")));
                 }
             }
             
             if (!fieldDiffs.isEmpty()) {
-                result.differences.add(new RowDifference(key, fieldDiffs));
+                result.differences.add(new RowDifference(key, fieldDiffs, row1, row2));
             } else {
                 result.identicalRows++;
             }
+            
+            processed++;
+            if (processed % 1000 == 0) {
+                log("Processed " + processed + " / " + commonKeys.size() + " rows");
+            }
         }
+        
+        // Group differences by field combinations
+        result.fieldGroups = groupDifferencesByFields(result.differences);
+        
+        log("Comparison completed: " + result.commonKeys + " common keys, " + 
+            result.differences.size() + " differences found");
+        log("Field combinations found: " + result.fieldGroups.size());
         
         return result;
     }
     
     /**
-     * 对比CSV文件
+     * Group row differences by field combinations
+     */
+    private Map<String, FieldGroup> groupDifferencesByFields(List<RowDifference> differences) {
+        Map<String, FieldGroup> groups = new LinkedHashMap<>();
+        
+        for (RowDifference diff : differences) {
+            // Create field combination key (sorted for consistency)
+            List<String> fields = diff.differences.stream()
+                    .map(fd -> fd.field)
+                    .sorted()
+                    .collect(Collectors.toList());
+            
+            String groupKey = String.join(", ", fields);
+            
+            FieldGroup group = groups.get(groupKey);
+            if (group == null) {
+                group = new FieldGroup(fields);
+                groups.put(groupKey, group);
+            }
+            
+            group.addDifference(diff);
+        }
+        
+        // Sort groups by count (descending)
+        return groups.entrySet().stream()
+                .sorted((a, b) -> Integer.compare(b.getValue().count, a.getValue().count))
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (a, b) -> a,
+                        LinkedHashMap::new
+                ));
+    }
+    
+    /**
+     * Compare CSV files
      */
     public ComparisonResult compareCSVs(String file1, String file2, String outputHtml) 
-            throws IOException, InterruptedException, ExecutionException {
+            throws IOException {
         
-        logger.info("开始CSV对比流程");
+        log("Starting CSV comparison process");
         
+        // Load data
         List<Map<String, String>> data1 = loadCSV(file1);
         List<Map<String, String>> data2 = loadCSV(file2);
         
-        // 验证主键
+        // Validate primary keys
         for (String key : primaryKeys) {
-            if (data1.isEmpty() || !data1.get(0).containsKey(key)) {
-                throw new IllegalArgumentException("主键 '" + key + "' 不存在于文件1中");
+            if (!data1.get(0).containsKey(key)) {
+                throw new IllegalArgumentException("Primary key '" + key + "' not found in file1");
             }
-            if (data2.isEmpty() || !data2.get(0).containsKey(key)) {
-                throw new IllegalArgumentException("主键 '" + key + "' 不存在于文件2中");
+            if (!data2.get(0).containsKey(key)) {
+                throw new IllegalArgumentException("Primary key '" + key + "' not found in file2");
             }
         }
         
         if (!excludeFields.isEmpty()) {
-            logger.info("排除比较的字段: " + String.join(", ", excludeFields));
+            log("Excluded fields: " + String.join(", ", excludeFields));
         }
         
-        SampledData sampledData = intelligentSampling(data1, data2);
-        ComparisonResult result = parallelCompare(sampledData.data1, sampledData.data2);
+        // Intelligent sampling
+        SampledData sampled = intelligentSampling(data1, data2);
         
+        // Execute sequential comparison
+        ComparisonResult result = sequentialCompare(sampled.data1, sampled.data2);
+        
+        // Generate HTML report
         generateHTMLReport(result, file1, file2, outputHtml);
-        this.comparisonResults = result;
         
+        this.comparisonResults = result;
         return result;
     }
     
     /**
-     * 生成HTML报告
+     * Generate HTML report with field grouping
      */
-    private void generateHTMLReport(ComparisonResult result, String file1, String file2, String outputPath) 
-            throws IOException {
+    private void generateHTMLReport(ComparisonResult result, String file1, 
+                                   String file2, String outputPath) throws IOException {
         
         StringBuilder html = new StringBuilder();
         html.append("<!DOCTYPE html>\n<html>\n<head>\n");
-        html.append("    <title>CSV对比报告</title>\n");
+        html.append("    <title>CSV Comparison Report</title>\n");
         html.append("    <meta charset=\"UTF-8\">\n");
         html.append("    <style>\n");
-        html.append("        body { font-family: Arial, sans-serif; margin: 20px; }\n");
-        html.append("        .header { background-color: #f0f0f0; padding: 20px; border-radius: 5px; }\n");
-        html.append("        .summary { margin: 20px 0; }\n");
-        html.append("        .stats { display: flex; justify-content: space-around; margin: 20px 0; }\n");
-        html.append("        .stat-box { background-color: #e8f4f8; padding: 15px; border-radius: 5px; text-align: center; }\n");
-        html.append("        .differences { margin: 20px 0; }\n");
-        html.append("        .diff-row { border: 1px solid #ddd; margin: 10px 0; padding: 10px; border-radius: 5px; }\n");
-        html.append("        .diff-row:nth-child(even) { background-color: #f9f9f9; }\n");
-        html.append("        .field-diff { margin: 5px 0; padding: 5px; background-color: #fff3cd; border-radius: 3px; }\n");
-        html.append("        .key { font-weight: bold; color: #0066cc; }\n");
-        html.append("        .field-name { font-weight: bold; }\n");
-        html.append("        .value1 { color: #d32f2f; }\n");
-        html.append("        .value2 { color: #388e3c; }\n");
-        html.append("        .no-differences { color: #666; font-style: italic; }\n");
-        html.append("        .excluded-fields { background-color: #f8f9fa; padding: 10px; border-radius: 5px; margin: 10px 0; }\n");
+        html.append("        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }\n");
+        html.append("        .header { background-color: #2c3e50; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }\n");
+        html.append("        .stats { display: flex; justify-content: space-around; margin: 20px 0; flex-wrap: wrap; }\n");
+        html.append("        .stat-box { background-color: #3498db; color: white; padding: 15px; border-radius: 5px; text-align: center; margin: 10px; min-width: 150px; }\n");
+        html.append("        .field-group { border: 2px solid #3498db; margin: 20px 0; padding: 20px; border-radius: 8px; background-color: white; }\n");
+        html.append("        .group-header { background-color: #3498db; color: white; padding: 15px; border-radius: 5px; margin-bottom: 15px; }\n");
+        html.append("        .group-fields { font-size: 1.2em; font-weight: bold; margin: 10px 0; }\n");
+        html.append("        .group-count { font-size: 1.1em; color: #e74c3c; }\n");
+        html.append("        .diff-row { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; background-color: #f9f9f9; }\n");
+        html.append("        .diff-row:nth-child(even) { background-color: #ecf0f1; }\n");
+        html.append("        .field-diff { margin: 5px 0; padding: 8px; background-color: #fff3cd; border-radius: 3px; border-left: 4px solid #ffc107; }\n");
+        html.append("        .key { font-weight: bold; color: #2c3e50; font-size: 1.1em; margin-bottom: 10px; }\n");
+        html.append("        .value1 { color: #e74c3c; font-weight: bold; }\n");
+        html.append("        .value2 { color: #27ae60; font-weight: bold; }\n");
+        html.append("        .full-row { margin-top: 15px; padding: 10px; background-color: #ecf0f1; border-radius: 3px; }\n");
+        html.append("        .full-row h4 { margin: 5px 0; color: #2c3e50; }\n");
+        html.append("        .row-data { font-family: 'Courier New', monospace; font-size: 0.9em; white-space: pre-wrap; word-break: break-all; }\n");
+        html.append("        .row-file1 { background-color: #ffebee; padding: 8px; border-radius: 3px; margin: 5px 0; border-left: 4px solid #e74c3c; }\n");
+        html.append("        .row-file2 { background-color: #e8f5e9; padding: 8px; border-radius: 3px; margin: 5px 0; border-left: 4px solid #27ae60; }\n");
+        html.append("        .field-label { display: inline-block; min-width: 150px; font-weight: bold; }\n");
+        html.append("        .summary-section { background-color: white; padding: 20px; border-radius: 5px; margin: 20px 0; }\n");
+        html.append("        .toggle-btn { background-color: #3498db; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; margin: 5px 0; }\n");
+        html.append("        .toggle-btn:hover { background-color: #2980b9; }\n");
+        html.append("        .details { display: none; margin-top: 10px; }\n");
+        html.append("        .details.show { display: block; }\n");
         html.append("    </style>\n");
+        html.append("    <script>\n");
+        html.append("        function toggleDetails(id) {\n");
+        html.append("            var details = document.getElementById(id);\n");
+        html.append("            details.classList.toggle('show');\n");
+        html.append("        }\n");
+        html.append("    </script>\n");
         html.append("</head>\n<body>\n");
         
+        // Header
         html.append("    <div class=\"header\">\n");
-        html.append("        <h1>CSV文件对比报告</h1>\n");
-        html.append("        <p><strong>文件1:</strong> ").append(escapeHtml(file1)).append("</p>\n");
-        html.append("        <p><strong>文件2:</strong> ").append(escapeHtml(file2)).append("</p>\n");
-        html.append("        <p><strong>对比时间:</strong> ");
-        html.append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-        html.append("</p>\n");
-        html.append("        <p><strong>主键:</strong> ").append(String.join(", ", primaryKeys)).append("</p>\n");
+        html.append("        <h1>CSV Comparison Report</h1>\n");
+        html.append("        <p><strong>File 1:</strong> ").append(escapeHtml(file1)).append("</p>\n");
+        html.append("        <p><strong>File 2:</strong> ").append(escapeHtml(file2)).append("</p>\n");
+        html.append("        <p><strong>Comparison Time:</strong> ").append(
+                new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date())).append("</p>\n");
+        html.append("        <p><strong>Primary Keys:</strong> ").append(String.join(", ", primaryKeys)).append("</p>\n");
         
         if (!excludeFields.isEmpty()) {
-            html.append("        <div class=\"excluded-fields\">\n");
-            html.append("            <strong>排除比较的字段:</strong> ").append(String.join(", ", excludeFields)).append("\n");
-            html.append("        </div>\n");
+            html.append("        <p><strong>Excluded Fields:</strong> ").append(
+                    String.join(", ", excludeFields)).append("</p>\n");
         }
         
-        html.append("    </div>\n\n");
+        html.append("    </div>\n");
         
-        html.append("    <div class=\"summary\">\n");
-        html.append("        <h2>对比摘要</h2>\n");
+        // Overall Stats
+        html.append("    <div class=\"summary-section\">\n");
+        html.append("        <h2>Comparison Summary</h2>\n");
         html.append("        <div class=\"stats\">\n");
-        html.append("            <div class=\"stat-box\"><h3>").append(result.totalKeys).append("</h3><p>总主键数</p></div>\n");
-        html.append("            <div class=\"stat-box\"><h3>").append(result.commonKeys).append("</h3><p>共同主键数</p></div>\n");
-        html.append("            <div class=\"stat-box\"><h3>").append(result.onlyInData1).append("</h3><p>仅在文件1中</p></div>\n");
-        html.append("            <div class=\"stat-box\"><h3>").append(result.onlyInData2).append("</h3><p>仅在文件2中</p></div>\n");
-        html.append("            <div class=\"stat-box\"><h3>").append(result.identicalRows).append("</h3><p>完全相同行数</p></div>\n");
-        html.append("            <div class=\"stat-box\"><h3>").append(result.differences.size()).append("</h3><p>存在差异行数</p></div>\n");
+        html.append("            <div class=\"stat-box\"><h3>").append(result.totalKeys)
+            .append("</h3><p>Total Keys</p></div>\n");
+        html.append("            <div class=\"stat-box\"><h3>").append(result.commonKeys)
+            .append("</h3><p>Common Keys</p></div>\n");
+        html.append("            <div class=\"stat-box\"><h3>").append(result.onlyInData1)
+            .append("</h3><p>Only in File 1</p></div>\n");
+        html.append("            <div class=\"stat-box\"><h3>").append(result.onlyInData2)
+            .append("</h3><p>Only in File 2</p></div>\n");
+        html.append("            <div class=\"stat-box\"><h3>").append(result.identicalRows)
+            .append("</h3><p>Identical Rows</p></div>\n");
+        html.append("            <div class=\"stat-box\"><h3>").append(result.differences.size())
+            .append("</h3><p>Rows with Differences</p></div>\n");
         html.append("        </div>\n");
-        html.append("    </div>\n\n");
+        html.append("    </div>\n");
         
-        html.append("    <div class=\"differences\">\n");
-        html.append("        <h2>详细差异 (显示前100条)</h2>\n");
+        // Field Groups
+        html.append("    <div class=\"summary-section\">\n");
+        html.append("        <h2>Differences Grouped by Field Combinations</h2>\n");
+        html.append("        <p>Total field combinations: <strong>").append(result.fieldGroups.size()).append("</strong></p>\n");
         
-        if (result.differences.isEmpty()) {
-            html.append("        <p class=\"no-differences\">未发现数据差异</p>\n");
+        if (result.fieldGroups.isEmpty()) {
+            html.append("        <p>No differences found</p>\n");
         } else {
-            int limit = Math.min(100, result.differences.size());
-            for (int i = 0; i < limit; i++) {
-                RowDifference diff = result.differences.get(i);
-                html.append("        <div class=\"diff-row\">\n");
-                html.append("            <p class=\"key\">主键: ").append(escapeHtml(diff.key)).append("</p>\n");
+            int groupIndex = 0;
+            for (Map.Entry<String, FieldGroup> entry : result.fieldGroups.entrySet()) {
+                groupIndex++;
+                FieldGroup group = entry.getValue();
+                String groupId = "group_" + groupIndex;
                 
-                for (FieldDifference fieldDiff : diff.differences) {
-                    html.append("            <div class=\"field-diff\">\n");
-                    html.append("                <span class=\"field-name\">").append(escapeHtml(fieldDiff.field)).append(":</span>\n");
-                    html.append("                <span class=\"value1\">文件1: ").append(escapeHtml(fieldDiff.value1)).append("</span> → \n");
-                    html.append("                <span class=\"value2\">文件2: ").append(escapeHtml(fieldDiff.value2)).append("</span>\n");
-                    html.append("            </div>\n");
+                html.append("        <div class=\"field-group\">\n");
+                html.append("            <div class=\"group-header\">\n");
+                html.append("                <div class=\"group-fields\">Fields: ").append(escapeHtml(entry.getKey())).append("</div>\n");
+                html.append("                <div class=\"group-count\">Number of rows with these differences: ").append(group.count).append("</div>\n");
+                html.append("                <button class=\"toggle-btn\" onclick=\"toggleDetails('").append(groupId).append("')\">Show/Hide Details</button>\n");
+                html.append("            </div>\n");
+                
+                html.append("            <div id=\"").append(groupId).append("\" class=\"details\">\n");
+                
+                // Show first 50 differences in this group
+                int limit = Math.min(50, group.differences.size());
+                for (int i = 0; i < limit; i++) {
+                    RowDifference diff = group.differences.get(i);
+                    
+                    html.append("                <div class=\"diff-row\">\n");
+                    html.append("                    <p class=\"key\">Primary Key: ").append(escapeHtml(diff.key)).append("</p>\n");
+                    
+                    // Show field differences
+                    html.append("                    <div style=\"margin: 10px 0;\">\n");
+                    for (FieldDifference fd : diff.differences) {
+                        html.append("                        <div class=\"field-diff\">\n");
+                        html.append("                            <strong>").append(escapeHtml(fd.field)).append(":</strong><br>\n");
+                        html.append("                            <span class=\"value1\">File 1: ").append(escapeHtml(fd.value1)).append("</span><br>\n");
+                        html.append("                            <span class=\"value2\">File 2: ").append(escapeHtml(fd.value2)).append("</span>\n");
+                        html.append("                        </div>\n");
+                    }
+                    html.append("                    </div>\n");
+                    
+                    // Show complete rows
+                    html.append("                    <div class=\"full-row\">\n");
+                    html.append("                        <h4>Complete Row from File 1:</h4>\n");
+                    html.append("                        <div class=\"row-file1 row-data\">\n");
+                    for (Map.Entry<String, String> rowEntry : diff.completeRow1.entrySet()) {
+                        html.append("                            <span class=\"field-label\">").append(escapeHtml(rowEntry.getKey())).append(":</span> ");
+                        html.append(escapeHtml(rowEntry.getValue())).append("<br>\n");
+                    }
+                    html.append("                        </div>\n");
+                    
+                    html.append("                        <h4>Complete Row from File 2:</h4>\n");
+                    html.append("                        <div class=\"row-file2 row-data\">\n");
+                    for (Map.Entry<String, String> rowEntry : diff.completeRow2.entrySet()) {
+                        html.append("                            <span class=\"field-label\">").append(escapeHtml(rowEntry.getKey())).append(":</span> ");
+                        html.append(escapeHtml(rowEntry.getValue())).append("<br>\n");
+                    }
+                    html.append("                        </div>\n");
+                    html.append("                    </div>\n");
+                    
+                    html.append("                </div>\n");
                 }
                 
+                if (group.differences.size() > limit) {
+                    html.append("                <p style=\"text-align: center; color: #7f8c8d; margin: 15px 0;\">");
+                    html.append("Showing ").append(limit).append(" of ").append(group.differences.size()).append(" differences in this group");
+                    html.append("</p>\n");
+                }
+                
+                html.append("            </div>\n");
                 html.append("        </div>\n");
             }
         }
         
         html.append("    </div>\n");
         
-        // 字段差异统计
-        Map<String, Integer> fieldDiffCount = new LinkedHashMap<>();
+        // Field Statistics
+        html.append("    <div class=\"summary-section\">\n");
+        html.append("        <h2>Individual Field Difference Statistics</h2>\n");
+        html.append("        <p>Fields ranked by number of differences:</p>\n");
+        html.append("        <ul>\n");
+        
+        // Analyze field difference patterns
+        Map<String, Integer> fieldDiffCount = new HashMap<>();
         for (RowDifference diff : result.differences) {
-            for (FieldDifference fieldDiff : diff.differences) {
-                if (!excludeFields.contains(fieldDiff.field)) {
-                    fieldDiffCount.merge(fieldDiff.field, 1, Integer::sum);
+            for (FieldDifference fd : diff.differences) {
+                if (!excludeFields.contains(fd.field)) {
+                    fieldDiffCount.put(fd.field, fieldDiffCount.getOrDefault(fd.field, 0) + 1);
                 }
             }
         }
         
-        html.append("    <div class=\"summary\">\n");
-        html.append("        <h2>建议的数据转换</h2>\n");
-        html.append("        <p>基于对比结果，建议关注以下字段的转换规则:</p>\n");
-        html.append("        <ul>\n");
-        
         fieldDiffCount.entrySet().stream()
-            .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-            .forEach(entry -> html.append("            <li>").append(escapeHtml(entry.getKey()))
-                .append(": ").append(entry.getValue()).append(" 处差异</li>\n"));
+                .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+                .forEach(entry -> {
+                    html.append("            <li><strong>").append(escapeHtml(entry.getKey()))
+                        .append("</strong>: ").append(entry.getValue()).append(" differences</li>\n");
+                });
         
         html.append("        </ul>\n");
         html.append("    </div>\n");
+        
         html.append("</body>\n</html>");
         
         Files.write(Paths.get(outputPath), html.toString().getBytes(StandardCharsets.UTF_8));
-        logger.info("HTML报告已生成: " + outputPath);
+        log("HTML report generated: " + outputPath);
     }
     
     private String escapeHtml(String text) {
@@ -446,49 +536,23 @@ public class CSVComparator {
         return text.replace("&", "&amp;")
                    .replace("<", "&lt;")
                    .replace(">", "&gt;")
-                   .replace("\"", "&quot;")
-                   .replace("'", "&#39;");
+                   .replace("\"", "&quot;");
     }
     
-    /**
-     * 导出差异数据为CSV
-     */
-    public void exportDifferencesCSV(String outputPath) throws IOException {
-        if (comparisonResults == null || comparisonResults.differences.isEmpty()) {
-            logger.warning("无差异数据可导出");
-            return;
-        }
-        
-        try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(Paths.get(outputPath), StandardCharsets.UTF_8))) {
-            writer.println("primary_key,field,value_file1,value_file2");
-            
-            for (RowDifference diff : comparisonResults.differences) {
-                for (FieldDifference fieldDiff : diff.differences) {
-                    writer.printf("\"%s\",\"%s\",\"%s\",\"%s\"%n",
-                        escapeCsv(diff.key),
-                        escapeCsv(fieldDiff.field),
-                        escapeCsv(fieldDiff.value1),
-                        escapeCsv(fieldDiff.value2));
-                }
-            }
-        }
-        
-        logger.info("差异数据已导出: " + outputPath);
+    private void log(String message) {
+        System.out.println("[" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()) + "] " + message);
     }
     
-    private String escapeCsv(String text) {
-        if (text == null) return "";
-        return text.replace("\"", "\"\"");
-    }
-    
-    // 内部类
+    // Inner classes
     static class SampledData {
         List<Map<String, String>> data1;
         List<Map<String, String>> data2;
+        Set<String> sampledKeys;
         
-        SampledData(List<Map<String, String>> data1, List<Map<String, String>> data2) {
+        SampledData(List<Map<String, String>> data1, List<Map<String, String>> data2, Set<String> sampledKeys) {
             this.data1 = data1;
             this.data2 = data2;
+            this.sampledKeys = sampledKeys;
         }
     }
     
@@ -499,20 +563,21 @@ public class CSVComparator {
         int onlyInData2;
         int identicalRows;
         List<RowDifference> differences = new ArrayList<>();
-    }
-    
-    static class ChunkResult {
-        List<RowDifference> differences = new ArrayList<>();
-        int identicalRows = 0;
+        Map<String, FieldGroup> fieldGroups = new LinkedHashMap<>();
     }
     
     static class RowDifference {
         String key;
         List<FieldDifference> differences;
+        Map<String, String> completeRow1;
+        Map<String, String> completeRow2;
         
-        RowDifference(String key, List<FieldDifference> differences) {
+        RowDifference(String key, List<FieldDifference> differences, 
+                     Map<String, String> completeRow1, Map<String, String> completeRow2) {
             this.key = key;
             this.differences = differences;
+            this.completeRow1 = completeRow1;
+            this.completeRow2 = completeRow2;
         }
     }
     
@@ -528,92 +593,76 @@ public class CSVComparator {
         }
     }
     
+    static class FieldGroup {
+        List<String> fields;
+        List<RowDifference> differences;
+        int count;
+        
+        FieldGroup(List<String> fields) {
+            this.fields = fields;
+            this.differences = new ArrayList<>();
+            this.count = 0;
+        }
+        
+        void addDifference(RowDifference diff) {
+            this.differences.add(diff);
+            this.count++;
+        }
+    }
+    
     /**
-     * 命令行主函数
+     * Main method
      */
     public static void main(String[] args) {
-        if (args.length < 2) {
-            System.out.println("用法: java CSVComparator <文件1> <文件2> [选项]");
-            System.out.println("选项:");
-            System.out.println("  --keys <主键1> [主键2...]    主键列名（必须）");
-            System.out.println("  --exclude <字段1> [字段2...] 排除不比较的字段");
-            System.out.println("  --sample-rate <0-1>          抽样率");
-            System.out.println("  --output <文件>              输出HTML报告路径");
-            System.out.println("  --export-csv <文件>          导出差异数据CSV路径");
-            System.exit(1);
+        if (args.length < 3) {
+            System.out.println("Usage: java CSVComparator <file1> <file2> <key1[,key2,...]> [options]");
+            System.out.println("Options:");
+            System.out.println("  --sample-rate=<rate>  Sample rate (0-1), default 0.1");
+            System.out.println("  --exclude=<field1,field2,...>  Excluded fields");
+            System.out.println("  --output=<path>  Output HTML path, default comparison_report.html");
+            System.out.println("\nExample:");
+            System.out.println("  java CSVComparator file1.csv file2.csv id --sample-rate=0.2 --output=report.html");
+            return;
+        }
+        
+        String file1 = args[0];
+        String file2 = args[1];
+        List<String> keys = Arrays.asList(args[2].split(","));
+        
+        double sampleRate = 0.1;
+        List<String> excludeFields = new ArrayList<>();
+        String output = "comparison_report.html";
+        
+        // Parse arguments
+        for (int i = 3; i < args.length; i++) {
+            if (args[i].startsWith("--sample-rate=")) {
+                sampleRate = Double.parseDouble(args[i].substring(14));
+            } else if (args[i].startsWith("--exclude=")) {
+                excludeFields = Arrays.asList(args[i].substring(10).split(","));
+            } else if (args[i].startsWith("--output=")) {
+                output = args[i].substring(9);
+            }
         }
         
         try {
-            String file1 = args[0];
-            String file2 = args[1];
-            List<String> primaryKeys = new ArrayList<>();
-            List<String> excludeFields = new ArrayList<>();
-            double sampleRate = 0.1;
-            String outputHtml = "comparison_report.html";
-            String exportCsv = null;
+            CSVComparator comparator = new CSVComparator(keys, sampleRate, excludeFields);
+            ComparisonResult result = comparator.compareCSVs(file1, file2, output);
             
-            // 解析选项
-            int i = 2;
-            while (i < args.length) {
-                switch (args[i]) {
-                    case "--keys":
-                    case "-k":
-                        i++;
-                        while (i < args.length && !args[i].startsWith("--") && !args[i].startsWith("-")) {
-                            primaryKeys.add(args[i++]);
-                        }
-                        break;
-                    case "--exclude":
-                    case "-e":
-                        i++;
-                        while (i < args.length && !args[i].startsWith("--") && !args[i].startsWith("-")) {
-                            excludeFields.add(args[i++]);
-                        }
-                        break;
-                    case "--sample-rate":
-                    case "-s":
-                        sampleRate = Double.parseDouble(args[++i]);
-                        i++;
-                        break;
-                    case "--output":
-                    case "-o":
-                        outputHtml = args[++i];
-                        i++;
-                        break;
-                    case "--export-csv":
-                        exportCsv = args[++i];
-                        i++;
-                        break;
-                    default:
-                        System.err.println("未知选项: " + args[i]);
-                        i++;
-                }
+            System.out.println("\n=== Comparison Complete ===");
+            System.out.println("Total keys: " + result.totalKeys);
+            System.out.println("Common keys: " + result.commonKeys);
+            System.out.println("Identical rows: " + result.identicalRows);
+            System.out.println("Rows with differences: " + result.differences.size());
+            System.out.println("Field combinations: " + result.fieldGroups.size());
+            System.out.println("\nField Combination Details:");
+            for (Map.Entry<String, FieldGroup> entry : result.fieldGroups.entrySet()) {
+                System.out.println("  " + entry.getKey() + ": " + entry.getValue().count + " rows");
             }
-            
-            // 验证主键参数
-            if (primaryKeys.isEmpty()) {
-                System.err.println("错误: 必须使用 --keys 指定至少一个主键");
-                System.exit(1);
-            }
-            
-            CSVComparator comparator = new CSVComparator(primaryKeys, sampleRate, excludeFields);
-            ComparisonResult result = comparator.compareCSVs(file1, file2, outputHtml);
-            
-            if (exportCsv != null) {
-                comparator.exportDifferencesCSV(exportCsv);
-            }
-            
-            System.out.println("\n=== 对比完成 ===");
-            System.out.println("总主键数: " + result.totalKeys);
-            System.out.println("共同主键数: " + result.commonKeys);
-            System.out.println("相同行数: " + result.identicalRows);
-            System.out.println("差异行数: " + result.differences.size());
-            System.out.println("HTML报告: " + outputHtml);
+            System.out.println("\nHTML report: " + output);
             
         } catch (Exception e) {
-            logger.severe("对比过程出错: " + e.getMessage());
+            System.err.println("Error during comparison: " + e.getMessage());
             e.printStackTrace();
-            System.exit(1);
         }
     }
 }
