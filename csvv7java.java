@@ -5,11 +5,11 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
  * High-Performance CSV Comparison Tool - Java 8 Version
+ * Modified: Removed parallel processing, added field grouping
  */
 public class CSVComparator {
     
@@ -182,11 +182,10 @@ public class CSVComparator {
     }
     
     /**
-     * Parallel data comparison
+     * Sequential data comparison (removed parallel processing)
      */
-    public ComparisonResult parallelCompare(List<Map<String, String>> data1,
-                                           List<Map<String, String>> data2) 
-            throws InterruptedException, ExecutionException {
+    public ComparisonResult sequentialCompare(List<Map<String, String>> data1,
+                                             List<Map<String, String>> data2) {
         
         // Create index
         Map<String, Map<String, String>> indexed1 = data1.stream()
@@ -214,42 +213,11 @@ public class CSVComparator {
         result.onlyInData1 = onlyInData1.size();
         result.onlyInData2 = onlyInData2.size();
         
-        // Parallel processing
-        int chunkSize = 1000;
-        List<String> commonKeyList = new ArrayList<>(commonKeys);
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        List<Future<ChunkResult>> futures = new ArrayList<>();
+        // Sequential comparison
+        log("Starting sequential comparison of " + commonKeys.size() + " common keys");
         
-        for (int i = 0; i < commonKeyList.size(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, commonKeyList.size());
-            List<String> chunk = commonKeyList.subList(i, end);
-            
-            futures.add(executor.submit(() -> compareChunk(indexed1, indexed2, chunk)));
-        }
-        
-        // Collect results
-        for (Future<ChunkResult> future : futures) {
-            ChunkResult chunkResult = future.get();
-            result.differences.addAll(chunkResult.differences);
-            result.identicalRows += chunkResult.identicalRows;
-        }
-        
-        executor.shutdown();
-        
-        log("Comparison completed: " + result.commonKeys + " common keys");
-        return result;
-    }
-    
-    /**
-     * Compare data chunk
-     */
-    private ChunkResult compareChunk(Map<String, Map<String, String>> indexed1,
-                                    Map<String, Map<String, String>> indexed2,
-                                    List<String> keys) {
-        
-        ChunkResult result = new ChunkResult();
-        
-        for (String key : keys) {
+        int processed = 0;
+        for (String key : commonKeys) {
             Map<String, String> row1 = indexed1.get(key);
             Map<String, String> row2 = indexed2.get(key);
             
@@ -283,16 +251,63 @@ public class CSVComparator {
             } else {
                 result.identicalRows++;
             }
+            
+            processed++;
+            if (processed % 1000 == 0) {
+                log("Processed " + processed + " / " + commonKeys.size() + " rows");
+            }
         }
         
+        // Group differences by field combinations
+        result.fieldGroups = groupDifferencesByFields(result.differences);
+        
+        log("Comparison completed: " + result.commonKeys + " common keys, " + 
+            result.differences.size() + " differences found");
+        log("Field combinations found: " + result.fieldGroups.size());
+        
         return result;
+    }
+    
+    /**
+     * Group row differences by field combinations
+     */
+    private Map<String, FieldGroup> groupDifferencesByFields(List<RowDifference> differences) {
+        Map<String, FieldGroup> groups = new LinkedHashMap<>();
+        
+        for (RowDifference diff : differences) {
+            // Create field combination key (sorted for consistency)
+            List<String> fields = diff.differences.stream()
+                    .map(fd -> fd.field)
+                    .sorted()
+                    .collect(Collectors.toList());
+            
+            String groupKey = String.join(", ", fields);
+            
+            FieldGroup group = groups.get(groupKey);
+            if (group == null) {
+                group = new FieldGroup(fields);
+                groups.put(groupKey, group);
+            }
+            
+            group.addDifference(diff);
+        }
+        
+        // Sort groups by count (descending)
+        return groups.entrySet().stream()
+                .sorted((a, b) -> Integer.compare(b.getValue().count, a.getValue().count))
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (a, b) -> a,
+                        LinkedHashMap::new
+                ));
     }
     
     /**
      * Compare CSV files
      */
     public ComparisonResult compareCSVs(String file1, String file2, String outputHtml) 
-            throws IOException, InterruptedException, ExecutionException {
+            throws IOException {
         
         log("Starting CSV comparison process");
         
@@ -317,8 +332,8 @@ public class CSVComparator {
         // Intelligent sampling
         SampledData sampled = intelligentSampling(data1, data2);
         
-        // Execute comparison
-        ComparisonResult result = parallelCompare(sampled.data1, sampled.data2);
+        // Execute sequential comparison
+        ComparisonResult result = sequentialCompare(sampled.data1, sampled.data2);
         
         // Generate HTML report
         generateHTMLReport(result, file1, file2, outputHtml);
@@ -328,7 +343,7 @@ public class CSVComparator {
     }
     
     /**
-     * Generate HTML report with full row display for differences
+     * Generate HTML report with field grouping
      */
     private void generateHTMLReport(ComparisonResult result, String file1, 
                                    String file2, String outputPath) throws IOException {
@@ -338,30 +353,45 @@ public class CSVComparator {
         html.append("    <title>CSV Comparison Report</title>\n");
         html.append("    <meta charset=\"UTF-8\">\n");
         html.append("    <style>\n");
-        html.append("        body { font-family: Arial, sans-serif; margin: 20px; }\n");
-        html.append("        .header { background-color: #f0f0f0; padding: 20px; border-radius: 5px; }\n");
+        html.append("        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }\n");
+        html.append("        .header { background-color: #2c3e50; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }\n");
         html.append("        .stats { display: flex; justify-content: space-around; margin: 20px 0; flex-wrap: wrap; }\n");
-        html.append("        .stat-box { background-color: #e8f4f8; padding: 15px; border-radius: 5px; text-align: center; margin: 10px; min-width: 150px; }\n");
-        html.append("        .diff-row { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; background-color: #fff; }\n");
-        html.append("        .diff-row:nth-child(even) { background-color: #f9f9f9; }\n");
-        html.append("        .field-diff { margin: 5px 0; padding: 8px; background-color: #fff3cd; border-radius: 3px; }\n");
-        html.append("        .key { font-weight: bold; color: #0066cc; font-size: 1.1em; margin-bottom: 10px; }\n");
-        html.append("        .value1 { color: #d32f2f; }\n");
-        html.append("        .value2 { color: #388e3c; }\n");
-        html.append("        .full-row { margin-top: 15px; padding: 10px; background-color: #f5f5f5; border-radius: 3px; }\n");
-        html.append("        .full-row h4 { margin: 5px 0; color: #333; }\n");
+        html.append("        .stat-box { background-color: #3498db; color: white; padding: 15px; border-radius: 5px; text-align: center; margin: 10px; min-width: 150px; }\n");
+        html.append("        .field-group { border: 2px solid #3498db; margin: 20px 0; padding: 20px; border-radius: 8px; background-color: white; }\n");
+        html.append("        .group-header { background-color: #3498db; color: white; padding: 15px; border-radius: 5px; margin-bottom: 15px; }\n");
+        html.append("        .group-fields { font-size: 1.2em; font-weight: bold; margin: 10px 0; }\n");
+        html.append("        .group-count { font-size: 1.1em; color: #e74c3c; }\n");
+        html.append("        .diff-row { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; background-color: #f9f9f9; }\n");
+        html.append("        .diff-row:nth-child(even) { background-color: #ecf0f1; }\n");
+        html.append("        .field-diff { margin: 5px 0; padding: 8px; background-color: #fff3cd; border-radius: 3px; border-left: 4px solid #ffc107; }\n");
+        html.append("        .key { font-weight: bold; color: #2c3e50; font-size: 1.1em; margin-bottom: 10px; }\n");
+        html.append("        .value1 { color: #e74c3c; font-weight: bold; }\n");
+        html.append("        .value2 { color: #27ae60; font-weight: bold; }\n");
+        html.append("        .full-row { margin-top: 15px; padding: 10px; background-color: #ecf0f1; border-radius: 3px; }\n");
+        html.append("        .full-row h4 { margin: 5px 0; color: #2c3e50; }\n");
         html.append("        .row-data { font-family: 'Courier New', monospace; font-size: 0.9em; white-space: pre-wrap; word-break: break-all; }\n");
-        html.append("        .row-file1 { background-color: #ffebee; padding: 8px; border-radius: 3px; margin: 5px 0; }\n");
-        html.append("        .row-file2 { background-color: #e8f5e9; padding: 8px; border-radius: 3px; margin: 5px 0; }\n");
+        html.append("        .row-file1 { background-color: #ffebee; padding: 8px; border-radius: 3px; margin: 5px 0; border-left: 4px solid #e74c3c; }\n");
+        html.append("        .row-file2 { background-color: #e8f5e9; padding: 8px; border-radius: 3px; margin: 5px 0; border-left: 4px solid #27ae60; }\n");
         html.append("        .field-label { display: inline-block; min-width: 150px; font-weight: bold; }\n");
+        html.append("        .summary-section { background-color: white; padding: 20px; border-radius: 5px; margin: 20px 0; }\n");
+        html.append("        .toggle-btn { background-color: #3498db; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; margin: 5px 0; }\n");
+        html.append("        .toggle-btn:hover { background-color: #2980b9; }\n");
+        html.append("        .details { display: none; margin-top: 10px; }\n");
+        html.append("        .details.show { display: block; }\n");
         html.append("    </style>\n");
+        html.append("    <script>\n");
+        html.append("        function toggleDetails(id) {\n");
+        html.append("            var details = document.getElementById(id);\n");
+        html.append("            details.classList.toggle('show');\n");
+        html.append("        }\n");
+        html.append("    </script>\n");
         html.append("</head>\n<body>\n");
         
         // Header
         html.append("    <div class=\"header\">\n");
         html.append("        <h1>CSV Comparison Report</h1>\n");
-        html.append("        <p><strong>File 1:</strong> ").append(file1).append("</p>\n");
-        html.append("        <p><strong>File 2:</strong> ").append(file2).append("</p>\n");
+        html.append("        <p><strong>File 1:</strong> ").append(escapeHtml(file1)).append("</p>\n");
+        html.append("        <p><strong>File 2:</strong> ").append(escapeHtml(file2)).append("</p>\n");
         html.append("        <p><strong>Comparison Time:</strong> ").append(
                 new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date())).append("</p>\n");
         html.append("        <p><strong>Primary Keys:</strong> ").append(String.join(", ", primaryKeys)).append("</p>\n");
@@ -373,8 +403,8 @@ public class CSVComparator {
         
         html.append("    </div>\n");
         
-        // Stats
-        html.append("    <div class=\"summary\">\n");
+        // Overall Stats
+        html.append("    <div class=\"summary-section\">\n");
         html.append("        <h2>Comparison Summary</h2>\n");
         html.append("        <div class=\"stats\">\n");
         html.append("            <div class=\"stat-box\"><h3>").append(result.totalKeys)
@@ -392,60 +422,87 @@ public class CSVComparator {
         html.append("        </div>\n");
         html.append("    </div>\n");
         
-        // Differences
-        html.append("    <div class=\"differences\">\n");
-        html.append("        <h2>Detailed Differences (showing first 100)</h2>\n");
+        // Field Groups
+        html.append("    <div class=\"summary-section\">\n");
+        html.append("        <h2>Differences Grouped by Field Combinations</h2>\n");
+        html.append("        <p>Total field combinations: <strong>").append(result.fieldGroups.size()).append("</strong></p>\n");
         
-        if (result.differences.isEmpty()) {
-            html.append("        <p>No data differences found</p>\n");
+        if (result.fieldGroups.isEmpty()) {
+            html.append("        <p>No differences found</p>\n");
         } else {
-            int limit = Math.min(100, result.differences.size());
-            for (int i = 0; i < limit; i++) {
-                RowDifference diff = result.differences.get(i);
-                html.append("        <div class=\"diff-row\">\n");
-                html.append("            <p class=\"key\">Primary Key: ").append(escapeHtml(diff.key)).append("</p>\n");
+            int groupIndex = 0;
+            for (Map.Entry<String, FieldGroup> entry : result.fieldGroups.entrySet()) {
+                groupIndex++;
+                FieldGroup group = entry.getValue();
+                String groupId = "group_" + groupIndex;
                 
-                // Show field differences
-                html.append("            <div style=\"margin: 10px 0;\">\n");
-                html.append("                <strong>Field Differences:</strong>\n");
-                for (FieldDifference fd : diff.differences) {
-                    html.append("                <div class=\"field-diff\">\n");
-                    html.append("                    <strong>").append(escapeHtml(fd.field)).append(":</strong><br>\n");
-                    html.append("                    <span class=\"value1\">File 1: ").append(escapeHtml(fd.value1)).append("</span><br>\n");
-                    html.append("                    <span class=\"value2\">File 2: ").append(escapeHtml(fd.value2)).append("</span>\n");
+                html.append("        <div class=\"field-group\">\n");
+                html.append("            <div class=\"group-header\">\n");
+                html.append("                <div class=\"group-fields\">Fields: ").append(escapeHtml(entry.getKey())).append("</div>\n");
+                html.append("                <div class=\"group-count\">Number of rows with these differences: ").append(group.count).append("</div>\n");
+                html.append("                <button class=\"toggle-btn\" onclick=\"toggleDetails('").append(groupId).append("')\">Show/Hide Details</button>\n");
+                html.append("            </div>\n");
+                
+                html.append("            <div id=\"").append(groupId).append("\" class=\"details\">\n");
+                
+                // Show first 50 differences in this group
+                int limit = Math.min(50, group.differences.size());
+                for (int i = 0; i < limit; i++) {
+                    RowDifference diff = group.differences.get(i);
+                    
+                    html.append("                <div class=\"diff-row\">\n");
+                    html.append("                    <p class=\"key\">Primary Key: ").append(escapeHtml(diff.key)).append("</p>\n");
+                    
+                    // Show field differences
+                    html.append("                    <div style=\"margin: 10px 0;\">\n");
+                    for (FieldDifference fd : diff.differences) {
+                        html.append("                        <div class=\"field-diff\">\n");
+                        html.append("                            <strong>").append(escapeHtml(fd.field)).append(":</strong><br>\n");
+                        html.append("                            <span class=\"value1\">File 1: ").append(escapeHtml(fd.value1)).append("</span><br>\n");
+                        html.append("                            <span class=\"value2\">File 2: ").append(escapeHtml(fd.value2)).append("</span>\n");
+                        html.append("                        </div>\n");
+                    }
+                    html.append("                    </div>\n");
+                    
+                    // Show complete rows
+                    html.append("                    <div class=\"full-row\">\n");
+                    html.append("                        <h4>Complete Row from File 1:</h4>\n");
+                    html.append("                        <div class=\"row-file1 row-data\">\n");
+                    for (Map.Entry<String, String> rowEntry : diff.completeRow1.entrySet()) {
+                        html.append("                            <span class=\"field-label\">").append(escapeHtml(rowEntry.getKey())).append(":</span> ");
+                        html.append(escapeHtml(rowEntry.getValue())).append("<br>\n");
+                    }
+                    html.append("                        </div>\n");
+                    
+                    html.append("                        <h4>Complete Row from File 2:</h4>\n");
+                    html.append("                        <div class=\"row-file2 row-data\">\n");
+                    for (Map.Entry<String, String> rowEntry : diff.completeRow2.entrySet()) {
+                        html.append("                            <span class=\"field-label\">").append(escapeHtml(rowEntry.getKey())).append(":</span> ");
+                        html.append(escapeHtml(rowEntry.getValue())).append("<br>\n");
+                    }
+                    html.append("                        </div>\n");
+                    html.append("                    </div>\n");
+                    
                     html.append("                </div>\n");
                 }
-                html.append("            </div>\n");
                 
-                // Show complete rows
-                html.append("            <div class=\"full-row\">\n");
-                html.append("                <h4>Complete Row from File 1:</h4>\n");
-                html.append("                <div class=\"row-file1 row-data\">\n");
-                for (Map.Entry<String, String> entry : diff.completeRow1.entrySet()) {
-                    html.append("                    <span class=\"field-label\">").append(escapeHtml(entry.getKey())).append(":</span> ");
-                    html.append(escapeHtml(entry.getValue())).append("<br>\n");
+                if (group.differences.size() > limit) {
+                    html.append("                <p style=\"text-align: center; color: #7f8c8d; margin: 15px 0;\">");
+                    html.append("Showing ").append(limit).append(" of ").append(group.differences.size()).append(" differences in this group");
+                    html.append("</p>\n");
                 }
-                html.append("                </div>\n");
                 
-                html.append("                <h4>Complete Row from File 2:</h4>\n");
-                html.append("                <div class=\"row-file2 row-data\">\n");
-                for (Map.Entry<String, String> entry : diff.completeRow2.entrySet()) {
-                    html.append("                    <span class=\"field-label\">").append(escapeHtml(entry.getKey())).append(":</span> ");
-                    html.append(escapeHtml(entry.getValue())).append("<br>\n");
-                }
-                html.append("                </div>\n");
                 html.append("            </div>\n");
-                
                 html.append("        </div>\n");
             }
         }
         
         html.append("    </div>\n");
         
-        // Field difference statistics
-        html.append("    <div class=\"summary\">\n");
-        html.append("        <h2>Field Difference Statistics</h2>\n");
-        html.append("        <p>Fields with most differences:</p>\n");
+        // Field Statistics
+        html.append("    <div class=\"summary-section\">\n");
+        html.append("        <h2>Individual Field Difference Statistics</h2>\n");
+        html.append("        <p>Fields ranked by number of differences:</p>\n");
         html.append("        <ul>\n");
         
         // Analyze field difference patterns
@@ -461,8 +518,8 @@ public class CSVComparator {
         fieldDiffCount.entrySet().stream()
                 .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
                 .forEach(entry -> {
-                    html.append("            <li>").append(escapeHtml(entry.getKey()))
-                        .append(": ").append(entry.getValue()).append(" differences</li>\n");
+                    html.append("            <li><strong>").append(escapeHtml(entry.getKey()))
+                        .append("</strong>: ").append(entry.getValue()).append(" differences</li>\n");
                 });
         
         html.append("        </ul>\n");
@@ -506,6 +563,7 @@ public class CSVComparator {
         int onlyInData2;
         int identicalRows;
         List<RowDifference> differences = new ArrayList<>();
+        Map<String, FieldGroup> fieldGroups = new LinkedHashMap<>();
     }
     
     static class RowDifference {
@@ -535,9 +593,21 @@ public class CSVComparator {
         }
     }
     
-    static class ChunkResult {
-        List<RowDifference> differences = new ArrayList<>();
-        int identicalRows = 0;
+    static class FieldGroup {
+        List<String> fields;
+        List<RowDifference> differences;
+        int count;
+        
+        FieldGroup(List<String> fields) {
+            this.fields = fields;
+            this.differences = new ArrayList<>();
+            this.count = 0;
+        }
+        
+        void addDifference(RowDifference diff) {
+            this.differences.add(diff);
+            this.count++;
+        }
     }
     
     /**
@@ -583,7 +653,12 @@ public class CSVComparator {
             System.out.println("Common keys: " + result.commonKeys);
             System.out.println("Identical rows: " + result.identicalRows);
             System.out.println("Rows with differences: " + result.differences.size());
-            System.out.println("HTML report: " + output);
+            System.out.println("Field combinations: " + result.fieldGroups.size());
+            System.out.println("\nField Combination Details:");
+            for (Map.Entry<String, FieldGroup> entry : result.fieldGroups.entrySet()) {
+                System.out.println("  " + entry.getKey() + ": " + entry.getValue().count + " rows");
+            }
+            System.out.println("\nHTML report: " + output);
             
         } catch (Exception e) {
             System.err.println("Error during comparison: " + e.getMessage());
